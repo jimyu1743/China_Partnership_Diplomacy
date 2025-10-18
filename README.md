@@ -1,2 +1,2 @@
 # China_Partnership_Diplomacy
-Somewhere for my web crawler code
+This where I share my code for statistic research.
