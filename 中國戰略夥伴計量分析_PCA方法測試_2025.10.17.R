@@ -12,16 +12,19 @@ packages <- c("tidyverse", "gapminder", "magrittr", "plm", "ExtremeBounds",
               "pglm", "panelWranglR", "readr", "readxl", "stats", 
               "GPArotation", "usdm")
 
-# 自動檢查、安裝並載入套件
+# 步驟 1: 檢查並安裝缺少的套件
 for (pkg in packages) {
   if (!require(pkg, character.only = TRUE, quietly = TRUE)) {
     cat("正在安裝:", pkg, "\n")
-    install.packages(pkg, lib = lib_path, dependencies = TRUE)
-    library(pkg, character.only = TRUE)
+    install.packages(pkg, dependencies = TRUE)
   }
 }
 
-cat("\n所有套件已就緒！\n")
+# 步驟 2: 載入所有套件
+for (pkg in packages) {
+  library(pkg, character.only = TRUE)
+  cat("已載入:", pkg, "\n")
+}
 
 # 讀入資料檔
 China_partnership_1996_2023_breakpoint_2025_03_05 <- read_excel("China partnership 1996-2023 breakpoint 2025.03.24.2.xlsx", sheet = "資料")
@@ -154,7 +157,7 @@ governance_factors <- c("va_std", "psv_std", "ge_std",
 years <- c(1996, 2013, 2023)
 
 # 識別國家欄位（請根據實際資料調整）
-country_id_col <- "ccode"  # 可能是 "country", "iso3c" 等
+country_id_col <- "countrycode"  
 
 # ============================================================================
 # 步驟0: 資料驗證
@@ -164,7 +167,7 @@ cat("\n", rep("=", 80), "\n")
 cat("步驟0: 資料驗證\n")
 cat(rep("=", 80), "\n\n")
 
-# 檢查資料框是否存在
+## 檢查資料框是否存在
 if (!exists("panel_CP9623")) {
   stop("錯誤: 找不到資料框 'panel_CP9623'。請先載入資料！")
 }
@@ -173,7 +176,16 @@ if (!exists("panel_CP9623")) {
 cat("資料框基本資訊:\n")
 cat("- 觀察值數量:", nrow(panel_CP9623), "\n")
 cat("- 變數數量:", ncol(panel_CP9623), "\n")
-cat("- 年度範圍:", paste(range(panel_CP9623$year, na.rm = TRUE), collapse = " - "), "\n\n")
+
+# 修正年度範圍的顯示方式
+if (is.factor(panel_CP9623$year)) {
+  # 如果是因子，顯示層級範圍
+  year_levels <- levels(panel_CP9623$year)
+  cat("- 年度範圍:", paste(year_levels[1], "-", year_levels[length(year_levels)]), "\n\n")
+} else {
+  # 如果是數值，使用 range
+  cat("- 年度範圍:", paste(range(panel_CP9623$year, na.rm = TRUE), collapse = " - "), "\n\n")
+}
 
 # 檢查國家識別欄位
 if (!country_id_col %in% names(panel_CP9623)) {
@@ -440,11 +452,14 @@ analyze_cluster_features <- function(data, cluster_result, country_col) {
     filter(year == target_year) %>%
     mutate(cluster = NA_integer_)
   
+  # 將 country_col 轉換為一般向量（避免 pseries 問題）
+  country_vector <- as.character(year_data[[country_col]])
+  
   # 將分群結果對應回資料
   for (i in seq_along(cluster_result$country_id)) {
-    country_code <- cluster_result$country_id[i]
+    country_code <- as.character(cluster_result$country_id[i])
     cluster_num <- cluster_result$clusters[i]
-    year_data$cluster[year_data[[country_col]] == country_code] <- cluster_num
+    year_data$cluster[country_vector == country_code] <- cluster_num
   }
   
   # 移除未分群的觀察值
@@ -473,7 +488,6 @@ analyze_cluster_features <- function(data, cluster_result, country_col) {
 
 # 分析三個年度
 cluster_profiles <- list()
-
 for (year in years) {
   if (as.character(year) %in% names(clustering_results)) {
     cluster_profiles[[as.character(year)]] <- 
@@ -482,7 +496,6 @@ for (year in years) {
                                country_id_col)
   }
 }
-
 # ============================================================================
 # 步驟6: 儲存結果
 # ============================================================================
@@ -522,6 +535,500 @@ cat("  - 治理維度:", ifelse(is.null(pca_governance), 0, pca_governance$n_com
 cat("\n分群數:", optimal_k, "\n")
 cat("分析年度:", paste(years, collapse = ", "), "\n")
 cat("\n✓ 分析流程完畢！\n")
+
+# ============================================================================
+# PCA 分群分析結果視覺化程式碼
+# ============================================================================
+
+# 載入必要套件
+library(tidyverse)
+library(FactoMineR)
+library(factoextra)
+library(knitr)
+library(kableExtra)
+library(gridExtra)
+library(plotly)
+
+# 設定圖表輸出資料夾
+output_dir <- "output_figures"
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir)
+}
+
+# ============================================================================
+# 第一部分：PCA 解釋變異量圖表
+# ============================================================================
+
+cat("正在生成 PCA 解釋變異量圖表...\n")
+
+# 設定圖表參數
+png(file.path(output_dir, "01_pca_variance_explained.png"), 
+    width = 1800, height = 600, res = 120)
+par(mfrow = c(1, 3), mar = c(4, 4, 3, 2))
+
+# 經濟維度
+fviz_eig(pca_clustering_analysis$pca_economic$pca_obj, 
+         main = "經濟維度 PCA 解釋變異量",
+         addlabels = TRUE,
+         ylim = c(0, 50),
+         barfill = "#00AFBB",
+         barcolor = "#00AFBB")
+
+# 結構維度
+fviz_eig(pca_clustering_analysis$pca_structural$pca_obj, 
+         main = "結構維度 PCA 解釋變異量",
+         addlabels = TRUE,
+         ylim = c(0, 50),
+         barfill = "#E7B800",
+         barcolor = "#E7B800")
+
+# 治理維度
+fviz_eig(pca_clustering_analysis$pca_governance$pca_obj, 
+         main = "治理維度 PCA 解釋變異量",
+         addlabels = TRUE,
+         ylim = c(0, 100),
+         barfill = "#FC4E07",
+         barcolor = "#FC4E07")
+
+dev.off()
+
+# ============================================================================
+# 第二部分：變數貢獻度圖
+# ============================================================================
+
+cat("正在生成變數貢獻度圖表...\n")
+
+# 經濟維度變數貢獻
+png(file.path(output_dir, "02_economic_var_contrib.png"), 
+    width = 1200, height = 800, res = 120)
+fviz_contrib(pca_clustering_analysis$pca_economic$pca_obj, 
+             choice = "var", axes = 1:2,
+             title = "經濟變數對 PC1-PC2 的貢獻",
+             fill = "#00AFBB",
+             color = "#00AFBB")
+dev.off()
+
+# 結構維度變數貢獻
+png(file.path(output_dir, "03_structural_var_contrib.png"), 
+    width = 1200, height = 800, res = 120)
+fviz_contrib(pca_clustering_analysis$pca_structural$pca_obj, 
+             choice = "var", axes = 1:2,
+             title = "結構變數對 PC1-PC2 的貢獻",
+             fill = "#E7B800",
+             color = "#E7B800")
+dev.off()
+
+# 治理維度變數貢獻
+png(file.path(output_dir, "04_governance_var_contrib.png"), 
+    width = 1200, height = 800, res = 120)
+fviz_contrib(pca_clustering_analysis$pca_governance$pca_obj, 
+             choice = "var", axes = 1,
+             title = "治理變數對 PC1 的貢獻",
+             fill = "#FC4E07",
+             color = "#FC4E07")
+dev.off()
+
+# ============================================================================
+# 第三部分：變數相關圖 (Correlation Circle)
+# ============================================================================
+
+cat("正在生成變數相關圖...\n")
+
+# 經濟維度
+png(file.path(output_dir, "05_economic_var_circle.png"), 
+    width = 1000, height = 1000, res = 120)
+fviz_pca_var(pca_clustering_analysis$pca_economic$pca_obj,
+             col.var = "contrib",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE,
+             title = "經濟維度變數相關圖")
+dev.off()
+
+# 結構維度
+png(file.path(output_dir, "06_structural_var_circle.png"), 
+    width = 1000, height = 1000, res = 120)
+fviz_pca_var(pca_clustering_analysis$pca_structural$pca_obj,
+             col.var = "contrib",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE,
+             title = "結構維度變數相關圖")
+dev.off()
+
+# 治理維度（只有一個PC，繪製條形圖）
+png(file.path(output_dir, "07_governance_var_circle.png"), 
+    width = 1000, height = 800, res = 120)
+fviz_pca_var(pca_clustering_analysis$pca_governance$pca_obj,
+             axes = c(1, 1),
+             col.var = "contrib",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE,
+             title = "治理維度變數相關")
+dev.off()
+
+# ============================================================================
+# 第四部分：分群結果散佈圖（三個年度）
+# ============================================================================
+
+cat("正在生成分群散佈圖...\n")
+
+# 定義繪圖函數
+plot_cluster_scatter <- function(year, dimension = "economic") {
+  year_char <- as.character(year)
+  
+  # 取得該年度資料
+  year_data <- pca_clustering_analysis$data_with_pca %>%
+    filter(year == !!year)
+  
+  # 合併分群結果
+  clusters <- pca_clustering_analysis$clustering_results[[year_char]]
+  year_data$cluster <- NA
+  country_vector <- as.character(year_data$countrycode)
+  
+  for (i in seq_along(clusters$country_id)) {
+    country_code <- as.character(clusters$country_id[i])
+    cluster_num <- clusters$clusters[i]
+    year_data$cluster[country_vector == country_code] <- cluster_num
+  }
+  
+  year_data <- year_data %>% filter(!is.na(cluster))
+  
+  # 根據維度選擇變數
+  if (dimension == "economic") {
+    pc1 <- "econ_PC1"
+    pc2 <- "econ_PC2"
+    title <- paste(year, "年經濟維度分群 (PC1 vs PC2)")
+    colors <- c("#E41A1C", "#377EB8", "#4DAF4A")
+  } else if (dimension == "structural") {
+    pc1 <- "struct_PC1"
+    pc2 <- "struct_PC2"
+    title <- paste(year, "年結構維度分群 (PC1 vs PC2)")
+    colors <- c("#E41A1C", "#377EB8", "#4DAF4A")
+  } else {
+    pc1 <- "gov_PC1"
+    pc2 <- "econ_PC1"  # 治理只有一個PC，用經濟PC1作為第二軸
+    title <- paste(year, "年治理維度分群 (PC1 vs 經濟PC1)")
+    colors <- c("#E41A1C", "#377EB8", "#4DAF4A")
+  }
+  
+  # 繪製散佈圖
+  p <- ggplot(year_data, aes(x = .data[[pc1]], y = .data[[pc2]], 
+                             color = factor(cluster))) +
+    geom_point(size = 3, alpha = 0.6) +
+    stat_ellipse(level = 0.95, linewidth = 1) +
+    scale_color_manual(values = colors) +
+    labs(title = title,
+         x = gsub("_", " ", pc1),
+         y = gsub("_", " ", pc2),
+         color = "群組",
+         subtitle = paste("輪廓係數:", 
+                          round(clusters$silhouette, 3),
+                          "| 國家數:", clusters$n_countries)) +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "bottom",
+          plot.title = element_text(hjust = 0.5, face = "bold"),
+          plot.subtitle = element_text(hjust = 0.5))
+  
+  return(p)
+}
+
+# 繪製三個年度的經濟維度分群
+years <- c(1996, 2013, 2023)
+
+for (year in years) {
+  # 經濟維度
+  p <- plot_cluster_scatter(year, "economic")
+  ggsave(file.path(output_dir, 
+                   paste0("08_cluster_economic_", year, ".png")),
+         plot = p, width = 10, height = 8, dpi = 120)
+  
+  # 結構維度
+  p <- plot_cluster_scatter(year, "structural")
+  ggsave(file.path(output_dir, 
+                   paste0("09_cluster_structural_", year, ".png")),
+         plot = p, width = 10, height = 8, dpi = 120)
+  
+  # 治理維度
+  p <- plot_cluster_scatter(year, "governance")
+  ggsave(file.path(output_dir, 
+                   paste0("10_cluster_governance_", year, ".png")),
+         plot = p, width = 10, height = 8, dpi = 120)
+}
+
+# ============================================================================
+# 第五部分：三維度整合散佈圖
+# ============================================================================
+
+cat("正在生成三維度整合散佈圖...\n")
+
+for (year in years) {
+  year_char <- as.character(year)
+  
+  # 準備資料
+  year_data <- pca_clustering_analysis$data_with_pca %>%
+    filter(year == !!year)
+  
+  clusters <- pca_clustering_analysis$clustering_results[[year_char]]
+  year_data$cluster <- NA
+  country_vector <- as.character(year_data$countrycode)
+  
+  for (i in seq_along(clusters$country_id)) {
+    country_code <- as.character(clusters$country_id[i])
+    cluster_num <- clusters$clusters[i]
+    year_data$cluster[country_vector == country_code] <- cluster_num
+  }
+  
+  year_data <- year_data %>% filter(!is.na(cluster))
+  
+  # 3D散佈圖
+  p <- plot_ly(year_data,
+               x = ~econ_PC1, y = ~struct_PC1, z = ~gov_PC1,
+               color = ~factor(cluster),
+               colors = c("#E41A1C", "#377EB8", "#4DAF4A"),
+               text = ~paste("國家:", countryname, 
+                             "<br>群組:", cluster),
+               type = "scatter3d",
+               mode = "markers",
+               marker = list(size = 5)) %>%
+    layout(title = paste(year, "年三維度 PCA 分群結果"),
+           scene = list(
+             xaxis = list(title = "經濟 PC1"),
+             yaxis = list(title = "結構 PC1"),
+             zaxis = list(title = "治理 PC1")
+           ))
+  
+  # 儲存為 HTML
+  htmlwidgets::saveWidget(p, 
+                          file.path(output_dir, 
+                                    paste0("11_cluster_3d_", year, ".html")))
+}
+
+# ============================================================================
+# 第六部分：分群特徵熱圖
+# ============================================================================
+
+cat("正在生成分群特徵熱圖...\n")
+
+# 準備熱圖函數
+plot_cluster_heatmap <- function(year) {
+  year_char <- as.character(year)
+  profile <- pca_clustering_analysis$cluster_profiles[[year_char]]
+  
+  # 選擇要顯示的變數（排除 n）
+  vars_to_plot <- names(profile)[!names(profile) %in% c("cluster", "n")]
+  
+  # 轉換為矩陣
+  profile_matrix <- as.matrix(profile[, vars_to_plot])
+  rownames(profile_matrix) <- paste("群組", profile$cluster)
+  
+  # 標準化（每個變數）
+  profile_scaled <- scale(profile_matrix)
+  
+  # 繪製熱圖
+  png(file.path(output_dir, paste0("12_cluster_heatmap_", year, ".png")), 
+      width = 1400, height = 800, res = 120)
+  
+  heatmap(t(profile_scaled),
+          Colv = NA,
+          Rowv = NA,
+          scale = "none",
+          col = colorRampPalette(c("blue", "white", "red"))(50),
+          main = paste(year, "年各群組特徵熱圖（標準化）"),
+          xlab = "群組",
+          ylab = "變數",
+          margins = c(8, 15),
+          cexRow = 0.8,
+          cexCol = 1.2)
+  
+  dev.off()
+}
+
+for (year in years) {
+  plot_cluster_heatmap(year)
+}
+
+# ============================================================================
+# 第七部分：分群規模變化圖
+# ============================================================================
+
+cat("正在生成分群規模變化圖...\n")
+
+# 準備資料
+cluster_size_data <- data.frame(
+  year = integer(),
+  cluster = integer(),
+  n = integer()
+)
+
+for (year in years) {
+  year_char <- as.character(year)
+  profile <- pca_clustering_analysis$cluster_profiles[[year_char]]
+  
+  temp_data <- data.frame(
+    year = year,
+    cluster = as.numeric(as.character(profile$cluster)),
+    n = profile$n
+  )
+  
+  cluster_size_data <- rbind(cluster_size_data, temp_data)
+}
+
+# 繪製折線圖
+p <- ggplot(cluster_size_data, aes(x = year, y = n, 
+                                   color = factor(cluster),
+                                   group = cluster)) +
+  geom_line(linewidth = 1.5) +
+  geom_point(size = 4) +
+  scale_color_manual(values = c("#E41A1C", "#377EB8", "#4DAF4A")) +
+  labs(title = "各群組國家數量變化 (1996-2023)",
+       x = "年份",
+       y = "國家數量",
+       color = "群組") +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5, face = "bold"))
+
+ggsave(file.path(output_dir, "13_cluster_size_trend.png"),
+       plot = p, width = 10, height = 6, dpi = 120)
+
+# ============================================================================
+# 第八部分：變數載荷表格
+# ============================================================================
+
+cat("正在生成變數載荷表格...\n")
+
+# 經濟維度
+econ_loadings <- as.data.frame(
+  pca_clustering_analysis$pca_economic$pca_obj$var$coord[, 1:2]
+)
+econ_loadings$變數 <- rownames(econ_loadings)
+econ_loadings <- econ_loadings[, c("變數", "Dim.1", "Dim.2")]
+colnames(econ_loadings) <- c("變數", "PC1", "PC2")
+
+write.csv(econ_loadings, 
+          file.path(output_dir, "14_economic_loadings.csv"),
+          row.names = FALSE)
+
+# 結構維度
+struct_loadings <- as.data.frame(
+  pca_clustering_analysis$pca_structural$pca_obj$var$coord[, 1:2]
+)
+struct_loadings$變數 <- rownames(struct_loadings)
+struct_loadings <- struct_loadings[, c("變數", "Dim.1", "Dim.2")]
+colnames(struct_loadings) <- c("變數", "PC1", "PC2")
+
+write.csv(struct_loadings, 
+          file.path(output_dir, "15_structural_loadings.csv"),
+          row.names = FALSE)
+
+# 治理維度
+gov_loadings <- as.data.frame(
+  pca_clustering_analysis$pca_governance$pca_obj$var$coord[, 1, drop = FALSE]
+)
+gov_loadings$變數 <- rownames(gov_loadings)
+gov_loadings <- gov_loadings[, c("變數", "Dim.1")]
+colnames(gov_loadings) <- c("變數", "PC1")
+
+write.csv(gov_loadings, 
+          file.path(output_dir, "16_governance_loadings.csv"),
+          row.names = FALSE)
+
+# ============================================================================
+# 第九部分：分群特徵比較表
+# ============================================================================
+
+cat("正在生成分群特徵比較表...\n")
+
+for (year in years) {
+  year_char <- as.character(year)
+  profile <- pca_clustering_analysis$cluster_profiles[[year_char]]
+  
+  # 轉換為資料框
+  profile_df <- as.data.frame(profile)
+  
+  # 四捨五入
+  profile_df[, -c(1, 2)] <- round(profile_df[, -c(1, 2)], 3)
+  
+  # 儲存為 CSV
+  write.csv(profile_df, 
+            file.path(output_dir, 
+                      paste0("17_cluster_profile_", year, ".csv")),
+            row.names = FALSE)
+  
+  # 產生 HTML 表格
+  html_table <- kable(profile_df, 
+                      format = "html",
+                      caption = paste(year, "年各群組特徵（中位數）")) %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                  full_width = FALSE)
+  
+  save_kable(html_table, 
+             file.path(output_dir, 
+                       paste0("18_cluster_profile_", year, ".html")))
+}
+
+# ============================================================================
+# 第十部分：產生摘要報告
+# ============================================================================
+
+cat("正在生成摘要報告...\n")
+
+# 建立摘要文件
+summary_text <- paste0(
+  "PCA 分群分析結果摘要\n",
+  "==========================================\n\n",
+  "分析日期: ", Sys.Date(), "\n\n",
+  "一、PCA 降維結果\n",
+  "  - 經濟維度: 使用 ", 
+  pca_clustering_analysis$pca_economic$n_components, " 個主成分\n",
+  "  - 結構維度: 使用 ", 
+  pca_clustering_analysis$pca_structural$n_components, " 個主成分\n",
+  "  - 治理維度: 使用 ", 
+  pca_clustering_analysis$pca_governance$n_components, " 個主成分\n\n",
+  "二、最佳分群數: ", pca_clustering_analysis$optimal_k, "\n\n",
+  "三、各年度分群品質（輪廓係數）\n"
+)
+
+for (year in years) {
+  year_char <- as.character(year)
+  silhouette <- pca_clustering_analysis$clustering_results[[year_char]]$silhouette
+  n_countries <- pca_clustering_analysis$clustering_results[[year_char]]$n_countries
+  
+  summary_text <- paste0(summary_text,
+                         "  - ", year, "年: ", 
+                         round(silhouette, 4), 
+                         " (", n_countries, " 個國家)\n")
+}
+
+summary_text <- paste0(summary_text, "\n",
+                       "四、圖表清單\n",
+                       "  01-07: PCA 基礎分析圖表\n",
+                       "  08-10: 分群散佈圖（經濟、結構、治理維度）\n",
+                       "  11: 三維度互動式圖表 (HTML)\n",
+                       "  12: 分群特徵熱圖\n",
+                       "  13: 分群規模變化圖\n",
+                       "  14-16: 變數載荷表格 (CSV)\n",
+                       "  17-18: 分群特徵比較表 (CSV & HTML)\n")
+
+# 儲存摘要
+writeLines(summary_text, 
+           file.path(output_dir, "00_SUMMARY.txt"))
+
+# ============================================================================
+# 完成
+# ============================================================================
+
+cat("\n==========================================\n")
+cat("所有圖表已成功產製！\n")
+cat("輸出資料夾:", output_dir, "\n")
+cat("==========================================\n\n")
+
+# 列出所有產製的檔案
+files <- list.files(output_dir)
+cat("產製檔案清單:\n")
+for (i in seq_along(files)) {
+  cat(sprintf("%2d. %s\n", i, files[i]))
+}
+
 
 # ==========================================================================================================
 # 使用線性迴歸模型設定模式,並進行多元共線性檢測
