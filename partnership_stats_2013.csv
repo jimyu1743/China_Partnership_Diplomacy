@@ -1,0 +1,4 @@
+"cluster","n","partnership_mean","partnership_median","partnership_sd","partnership_min","partnership_max","partnership2_mean","partnership2_median","partnership2_sd","partnership2_min","partnership2_max"
+1,91,0.703296703296703,0,1.06973003338335,0,3,1.08791208791209,0.5,0.990492039884461,0,3.5
+2,51,0.647058823529412,0,1.07375098438632,0,3,1.02941176470588,0.5,0.934942590247564,0.5,3.5
+3,10,2.1,2.5,1.19721899973786,0,3,2.6,2.75,0.966091783079296,0.5,3.5

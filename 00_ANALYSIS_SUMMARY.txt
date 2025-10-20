@@ -1,0 +1,15 @@
+各集群 Partnership 表現分析報告
+============================================================
+
+分析日期: 2025-10-20
+分析年份: 1996, 2013, 2023
+
+主要發現:
+1. 描述統計結果已儲存至 partnership_stats_[year].csv
+2. 視覺化圖表已儲存至 partnership_dist_[var]_[year].png
+3. 時間趨勢圖已儲存至 partnership_trend_[var].png
+4. 統計檢定結果已儲存至 statistical_tests_[var]_[year].txt
+5. 各集群國家名單已儲存至 country_list_[var]_[year].csv
+
+所有輸出檔案位於: partnership_analysis 資料夾
+

@@ -1,0 +1,31 @@
+2023 年 partnership 統計檢定結果
+================================================== 
+
+Kruskal-Wallis 檢定:
+
+	Kruskal-Wallis rank sum test
+
+data:  as.numeric(year_data[[var_name]]) by cluster
+Kruskal-Wallis chi-squared = 10.28, df = 2, p-value = 0.005856
+
+
+
+ANOVA 檢定:
+             Df Sum Sq Mean Sq F value  Pr(>F)   
+cluster       2  16.65   8.324   5.227 0.00636 **
+Residuals   155 246.85   1.593                   
+---
+Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+
+事後比較 (Pairwise Wilcoxon):
+
+	Pairwise comparisons using Wilcoxon rank sum test with continuity correction 
+
+data:  as.numeric(year_data[[var_name]]) and year_data$cluster 
+
+  1      2     
+2 1.0000 -     
+3 0.1683 0.0036
+
+P value adjustment method: bonferroni 

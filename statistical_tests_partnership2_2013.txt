@@ -1,0 +1,31 @@
+2013 年 partnership2 統計檢定結果
+================================================== 
+
+Kruskal-Wallis 檢定:
+
+	Kruskal-Wallis rank sum test
+
+data:  as.numeric(year_data[[var_name]]) by cluster
+Kruskal-Wallis chi-squared = 17.266, df = 2, p-value = 0.0001781
+
+
+
+ANOVA 檢定:
+             Df Sum Sq Mean Sq F value   Pr(>F)    
+cluster       2  22.07  11.035   11.71 1.89e-05 ***
+Residuals   149 140.40   0.942                     
+---
+Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+
+事後比較 (Pairwise Wilcoxon):
+
+	Pairwise comparisons using Wilcoxon rank sum test with continuity correction 
+
+data:  as.numeric(year_data[[var_name]]) and year_data$cluster 
+
+  1       2      
+2 1.00000 -      
+3 0.00027 0.00027
+
+P value adjustment method: bonferroni 
