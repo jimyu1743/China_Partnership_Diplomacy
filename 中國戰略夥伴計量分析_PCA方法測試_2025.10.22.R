@@ -566,53 +566,99 @@ cat("✓ 已儲存: 02_variable_correlation.png\n\n")
 # ============================================================================
 # 3. 分群散佈圖
 # ============================================================================
+
 cat("3. 產製分群散佈圖...\n")
 
-plot_yearly_clusters <- function(year) {
+plot_yearly_clusters_3d <- function(year) {
   year_char <- as.character(year)
   
-  year_data_raw <- final_results$data_with_pca_clusters %>%
-    filter(year == !!year, !is.na(cluster))
-  
-  year_data <- data.frame(
-    econ_PC1 = as.numeric(year_data_raw$econ_PC1),
-    sanct_PC1 = as.numeric(year_data_raw$sanct_PC1),  # 改為 sanct
-    cluster = as.numeric(year_data_raw$cluster)
+  year_data_raw <- dplyr::filter(
+    final_results$data_with_pca_clusters,
+    .data$year == year, !is.na(.data$cluster)
   )
   
-  clusters <- final_results$clustering_results[[year_char]]
+  # 找出治理維度欄位：優先常見候選，若找不到再用關鍵字模糊匹配
+  candidates <- c("pca_governance", "governance_PC1", "gov_PC1", "govern_PC1")
+  governance_col <- candidates[candidates %in% names(year_data_raw)]
+  if (length(governance_col) == 0) {
+    # 模糊搜尋：名稱同時包含 "govern" 與 "pc1"（不分大小寫）
+    nm <- names(year_data_raw)
+    has_govern <- grepl("govern", nm, ignore.case = TRUE)
+    has_pc1    <- grepl("pc1",    nm, ignore.case = TRUE)
+    governance_col <- nm[has_govern & has_pc1]
+  }
+  if (length(governance_col) == 0) {
+    stop("找不到治理維度欄位，請確認資料中的欄位名稱（例如 pca_governance / governance_PC1）。現有欄位：\n",
+         paste(names(year_data_raw), collapse = ", "))
+  }
+  governance_col <- governance_col[1]  # 取第一個匹配
   
-  p <- ggplot(year_data, aes(x = econ_PC1, y = sanct_PC1, 
-                             color = factor(cluster))) +
-    geom_point(size = 3, alpha = 0.7) +
-    stat_ellipse(level = 0.95, linewidth = 1) +
-    scale_color_manual(values = c("#E41A1C", "#377EB8", "#4DAF4A", "#984EA3")) +
-    labs(title = paste(year, "年國家分群結果"),
-         subtitle = paste("輪廓係數:", round(clusters$silhouette, 3),
-                          "| 國家數:", clusters$n_countries),
-         x = "經濟維度 PC1", y = "制裁維度 PC1",
-         color = "群組") +
-    theme_minimal(base_size = 12) +
-    theme(legend.position = "bottom",
-          plot.title = element_text(hjust = 0.5, face = "bold"),
-          plot.subtitle = element_text(hjust = 0.5))
+  # 建立繪圖資料，並過濾缺值
+  year_data <- data.frame(
+    econ_PC1  = as.numeric(year_data_raw$econ_PC1),
+    sanct_PC1 = as.numeric(year_data_raw$sanct_PC1),
+    gov_PC1   = as.numeric(year_data_raw[[governance_col]]),
+    cluster   = as.factor(year_data_raw$cluster),
+    check.names = FALSE
+  )
+  year_data <- year_data[stats::complete.cases(year_data), , drop = FALSE]
+  
+  if (nrow(year_data) == 0) {
+    return(plotly::layout(
+      plotly::plotly_empty(type = "scatter3d"),
+      title = paste0(year, "年國家分群結果（無可繪資料）")
+    ))
+  }
+  
+  clusters <- final_results$clustering_results[[year_char]]
+  subtitle_text <- if (!is.null(clusters)) {
+    paste("輪廓係數:", round(clusters$silhouette, 3), "| 國家數:", clusters$n_countries)
+  } else {
+    "（無可用分群摘要）"
+  }
+  
+  p <- plotly::plot_ly(
+    data = year_data,
+    x = ~econ_PC1, y = ~sanct_PC1, z = ~gov_PC1,
+    color = ~cluster,
+    colors = RColorBrewer::brewer.pal(8, "Set1"),
+    type = "scatter3d", mode = "markers",
+    marker = list(size = 4, opacity = 0.8)
+  )
+  
+  p <- plotly::layout(
+    p,
+    title = paste0(year, "年國家分群結果<br><sup>", subtitle_text, "</sup>"),
+    scene = list(
+      xaxis = list(title = "經濟維度 PC1"),
+      yaxis = list(title = "制裁維度 PC1"),
+      zaxis = list(title = paste0("治理維度 PC1（欄位：", governance_col, "）")),
+      aspectmode = "cube"
+    ),
+    legend = list(orientation = "h")
+  )
   
   return(p)
 }
-
 years <- final_results$analysis_years
-p1 <- plot_yearly_clusters(years[1])
-p2 <- plot_yearly_clusters(years[2])
-p3 <- plot_yearly_clusters(years[3])
+plots3d <- lapply(years, plot_yearly_clusters_3d)
 
-tryCatch({
-  png(file.path(output_dir, "03_clustering_results.png"), 
-      width = 1800, height = 600, res = 120)
-  print(p1 + p2 + p3)  # 使用 patchwork
-}, finally = {
-  dev.off()
-  Sys.sleep(0.5)
-})
+# 個別年份各存一個 HTML
+for (i in seq_along(years)) {
+  htmlwidgets::saveWidget(
+    plots3d[[i]],
+    file = file.path(output_dir, paste0("03_clustering_results_3d_", years[i], ".html")),
+    selfcontained = TRUE
+  )
+}
+
+# 合併成一個頁面（橫向排列）
+combo <- subplot(plots3d, nrows = 1, shareX = FALSE, shareY = FALSE, titleX = TRUE, titleY = TRUE, margin = 0.02)
+htmlwidgets::saveWidget(
+  combo,
+  file = file.path(output_dir, "03_clustering_results_3d_all.html"),
+  selfcontained = TRUE
+)
 
 cat("✓ 已儲存: 03_clustering_results.png\n\n")
 
@@ -629,14 +675,14 @@ for (year in years) {
   available_vars <- main_vars[main_vars %in% names(profile)]
   
   # 準備矩陣
-  profile_matrix <- as.matrix(profile[, available_vars])
+  profile_matrix <- as.matrix(profile[, available_vars, drop = FALSE])
   rownames(profile_matrix) <- paste("群組", profile$cluster)
   
   # 標準化
   profile_scaled <- scale(profile_matrix)
   
   # 繪製熱圖
-  png(file.path(output_dir, paste0("04_heatmap_", year, ".png")), 
+  png(file.path(output_dir, paste0("04_heatmap_", year, ".png")),
       width = 1400, height = 800, res = 120)
   
   heatmap(t(profile_scaled),
@@ -653,72 +699,69 @@ for (year in years) {
 
 cat("5. 產製應變數變化圖...\n")
 
-# 先檢查 outcome_trends 的結構
 if (!is.null(final_results$outcome_trends)) {
-  
-  # 檢視欄位名稱
   cat("outcome_trends 的欄位：", names(final_results$outcome_trends), "\n")
   
-  # 確保使用正確的欄位名稱
-  # 假設欄位可能是 Partnership 和 Partnership2（不是 _mean）
   trends_data <- final_results$outcome_trends %>%
-    mutate(
-      year = as.numeric(year),
-      cluster = as.numeric(cluster)
+    dplyr::mutate(
+      year = as.numeric(.data$year),
+      cluster = as.numeric(.data$cluster)
     )
   
-  # 檢查是否有 Partnership_mean 或需要計算
   if ("Partnership_mean" %in% names(trends_data)) {
-    p1 <- ggplot(trends_data, 
-                 aes(x = year, y = Partnership_mean, 
+    p1 <- ggplot(trends_data,
+                 aes(x = year, y = Partnership_mean,
                      color = factor(cluster), group = cluster)) +
       geom_line(linewidth = 1.2) +
       geom_point(size = 3) +
-      scale_color_manual(values = c("#E41A1C", "#377EB8", "#4DAF4A", "#984EA3")) +
+      scale_color_brewer(palette = "Set1") +
       labs(title = "Partnership 平均值變化",
            x = "年度", y = "Partnership 平均值",
            color = "群組") +
       theme_minimal(base_size = 12) +
       theme(legend.position = "bottom")
+    
+    png(file.path(output_dir, "05_outcome_trends.png"),
+        width = 800, height = 600, res = 120)
+    print(p1)
+    dev.off()
   } else if ("Partnership" %in% names(trends_data)) {
-    # 如果沒有 _mean，需要先計算
     trends_summary <- trends_data %>%
-      group_by(year, cluster) %>%
-      summarise(
-        Partnership_mean = mean(Partnership, na.rm = TRUE),
-        Partnership2_mean = mean(Partnership2, na.rm = TRUE),
-        n = n(),
-        .groups = 'drop'
+      dplyr::group_by(year, cluster) %>%
+      dplyr::summarise(
+        Partnership_mean  = mean(.data$Partnership,  na.rm = TRUE),
+        Partnership2_mean = mean(.data$Partnership2, na.rm = TRUE),
+        n = dplyr::n(),
+        .groups = "drop"
       )
     
-    p1 <- ggplot(trends_summary, 
-                 aes(x = year, y = Partnership_mean, 
+    p1 <- ggplot(trends_summary,
+                 aes(x = year, y = Partnership_mean,
                      color = factor(cluster), group = cluster)) +
       geom_line(linewidth = 1.2) +
       geom_point(size = 3) +
-      scale_color_manual(values = c("#E41A1C", "#377EB8", "#4DAF4A", "#984EA3")) +
+      scale_color_brewer(palette = "Set1") +
       labs(title = "Partnership 平均值變化",
            x = "年度", y = "Partnership 平均值",
            color = "群組") +
       theme_minimal(base_size = 12) +
       theme(legend.position = "bottom")
     
-    p2 <- ggplot(trends_summary, 
-                 aes(x = year, y = Partnership2_mean, 
+    p2 <- ggplot(trends_summary,
+                 aes(x = year, y = Partnership2_mean,
                      color = factor(cluster), group = cluster)) +
       geom_line(linewidth = 1.2) +
       geom_point(size = 3) +
-      scale_color_manual(values = c("#E41A1C", "#377EB8", "#4DAF4A", "#984EA3")) +
+      scale_color_brewer(palette = "Set1") +
       labs(title = "Partnership2 平均值變化",
            x = "年度", y = "Partnership2 平均值",
            color = "群組") +
       theme_minimal(base_size = 12) +
       theme(legend.position = "bottom")
     
-    # 合併儲存
-    png(file.path(output_dir, "05_outcome_trends.png"), 
+    png(file.path(output_dir, "05_outcome_trends.png"),
         width = 1600, height = 600, res = 120)
-    grid.arrange(p1, p2, ncol = 2)
+    gridExtra::grid.arrange(p1, p2, ncol = 2)
     dev.off()
   }
 }
@@ -771,7 +814,6 @@ if (!is.null(final_results$outcome_trends)) {
 # ============================================================================
 
 cat("8. 產製摘要報告...\n")
-
 summary_text <- paste0(
   "PCA 分群分析結果摘要\n",
   rep("=", 60), "\n\n",
@@ -782,8 +824,8 @@ summary_text <- paste0(
   "一、PCA 降維結果\n",
   "  經濟維度: ", final_results$pca_economic$n_components, " 個主成分 (",
   round(sum(final_results$pca_economic$pca_obj$eig[1:final_results$pca_economic$n_components, 2]), 1), "%)\n",
-  "  結構維度: ", final_results$pca_structural$n_components, " 個主成分 (",
-  round(sum(final_results$pca_structural$pca_obj$eig[1:final_results$pca_structural$n_components, 2]), 1), "%)\n",
+  "  制裁維度: ", final_results$pca_sanctional$n_components, " 個主成分 (",
+  round(sum(final_results$pca_sanctional$pca_obj$eig[1:final_results$pca_sanctional$n_components, 2]), 1), "%)\n",
   "  治理維度: ", final_results$pca_governance$n_components, " 個主成分 (",
   round(sum(final_results$pca_governance$pca_obj$eig[1:final_results$pca_governance$n_components, 2]), 1), "%)\n\n",
   
@@ -791,7 +833,6 @@ summary_text <- paste0(
   
   "三、各年度分群品質\n"
 )
-
 for (year in years) {
   year_char <- as.character(year)
   result <- final_results$clustering_results[[year_char]]
@@ -800,7 +841,6 @@ for (year in years) {
                          round(result$silhouette, 3), 
                          " | 國家數 = ", result$n_countries, "\n")
 }
-
 summary_text <- paste0(summary_text, "\n",
                        "四、產製圖表清單\n",
                        "  01. PCA 解釋變異量圖\n",
@@ -810,7 +850,6 @@ summary_text <- paste0(summary_text, "\n",
                        "  05. 應變數變化趨勢圖\n",
                        "  06. 群組規模變化圖\n",
                        "  table_*.csv: 統計表格\n")
-
 writeLines(summary_text, file.path(output_dir, "00_SUMMARY.txt"))
 
 # ============================================================================
@@ -842,7 +881,7 @@ library(gridExtra)
 setwd("D:/R_workspace")  # 改成您的實際路徑
 
 # ===== 【缺少的部分1】載入 PCA 分析結果 =====
-pca_results <- readRDS("pca_clustering_analysis.rds")
+pca_results <- readRDS("pca_clustering_analysis_A.rds")
 cat("✓ 已載入 PCA 分析結果\n")
 
 # ===== 【缺少的部分2】設定輸出資料夾 =====
@@ -895,54 +934,43 @@ cat("✓ 已準備集群標籤\n")
 # ============================================================================
 
 cat("\n步驟4: 計算描述統計...\n")
-
 analyze_partnership_by_cluster <- function(data, year) {
-  cluster_col <- paste0("cluster_", year)
-  
-  # 篩選該年份且有集群標籤的資料
+  # 篩選該年份的數據
   year_data <- data %>%
-    filter(year == !!year, !is.na(.data[[cluster_col]]))
+    filter(Year == year)
   
-  # 檢查是否有 partnership 和 partnership2
-  partnership_vars <- c("partnership", "partnership2")[
-    c("partnership", "partnership2") %in% names(year_data)
-  ]
-  
-  if (length(partnership_vars) == 0) {
-    cat("警告: 找不到 partnership 變數\n")
-    return(NULL)
-  }
-  
-  # 計算描述統計
-  stats_summary <- year_data %>%
-    rename(cluster = !!cluster_col) %>%
+  # 計算每個 cluster 的合作統計
+  cluster_stats <- year_data %>%
     group_by(cluster) %>%
     summarise(
-      n = n(),
-      across(
-        all_of(partnership_vars),
-        list(
-          mean = ~mean(as.numeric(.), na.rm = TRUE),
-          median = ~median(as.numeric(.), na.rm = TRUE),
-          sd = ~sd(as.numeric(.), na.rm = TRUE),
-          min = ~min(as.numeric(.), na.rm = TRUE),
-          max = ~max(as.numeric(.), na.rm = TRUE)
-        ),
-        .names = "{.col}_{.fn}"
-      ),
-      .groups = "drop"
+      total_partnerships = n(),
+      avg_citations = mean(Citation, na.rm = TRUE),
+      .groups = 'drop'
     )
   
-  cat("\n", year, "年 Partnership 描述統計:\n")
-  print(kable(stats_summary, digits = 3) %>%
-          kable_styling(bootstrap_options = c("striped", "hover")))
+  # 計算合作類型分布
+  partnership_types <- year_data %>%
+    group_by(cluster, Partnership_Type) %>%
+    summarise(count = n(), .groups = 'drop') %>%
+    group_by(cluster) %>%
+    mutate(percentage = count / sum(count) * 100) %>%
+    ungroup()
   
-  # 儲存結果
-  write.csv(stats_summary, 
-            file.path(output_dir, paste0("partnership_stats_", year, ".csv")),
-            row.names = FALSE)
+  # 將合作類型數據轉為寬格式(避免重複的 cluster 欄位)
+  partnership_wide <- partnership_types %>%
+    select(cluster, Partnership_Type, percentage) %>%
+    pivot_wider(
+      names_from = Partnership_Type,
+      values_from = percentage,
+      values_fill = 0,
+      names_prefix = "pct_"
+    )
   
-  return(stats_summary)
+  # 合併統計數據
+  result <- cluster_stats %>%
+    left_join(partnership_wide, by = "cluster")  # 明確指定 by 參數
+  
+  return(result)
 }
 
 # 對三個年份進行分析
@@ -1003,7 +1031,7 @@ statistical_tests <- function(data, year, var_name = "partnership") {
   cat("\n事後比較 (Pairwise Wilcoxon):\n")
   print(pairwise_test)
   
-  # 儲存結果（修正這裡）
+  # 儲存結果
   sink(file.path(output_dir, 
                  paste0("statistical_tests_", var_name, "_", year, ".txt")))
   cat(year, "年", var_name, "統計檢定結果\n")
