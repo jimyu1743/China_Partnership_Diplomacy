@@ -435,12 +435,13 @@ cluster_profiles <- lapply(clustering_results, analyze_features,
                            country_col = country_id_col)
 
 # ============================================================================
-# 步驟6: 追蹤國家分群變化
+# 步驟6修正: 國家分群追蹤
 # ============================================================================
 
 cat("\n步驟6: 國家分群追蹤\n", rep("=", 80), "\n")
 
-country_tracking <- data.frame(country = common_countries)
+# 使用共同國家建立追蹤表
+country_tracking <- data.frame(country = country_code)
 
 for (year in years) {
   result <- clustering_results[[as.character(year)]]
@@ -459,13 +460,17 @@ print(kable(head(country_tracking, 15)))
 cluster_cols <- paste0("cluster_", years)
 country_tracking$stability <- apply(
   country_tracking[, cluster_cols], 1, 
-  function(x) length(unique(na.omit(x))) == 1
+  function(x) {
+    unique_clusters <- unique(na.omit(x))
+    length(unique_clusters) == 1 && length(na.omit(x)) == length(years)
+  }
 )
 
 stable <- sum(country_tracking$stability, na.rm = TRUE)
-cat("\n三年分群一致:", stable, "/", nrow(country_tracking), 
-    "(", round(stable/nrow(country_tracking)*100, 1), "%)\n")
+total <- sum(complete.cases(country_tracking[, cluster_cols]))
 
+cat("\n三年分群一致:", stable, "/", total, 
+    "(", round(stable/total*100, 1), "%)\n")
 # ============================================================================
 # 步驟7: 應變數跨年變化
 # ============================================================================
@@ -516,7 +521,7 @@ if (length(available_outcomes) > 0) {
 cat("\n步驟8: 儲存結果\n", rep("=", 80), "\n")
 
 final_results <- list(
-  common_countries = common_countries,
+  countries = country_code,
   analysis_years = years,
   pca_economic = pca_economic,
   pca_sanctional = pca_sanctional,
@@ -529,12 +534,12 @@ final_results <- list(
   outcome_trends = outcome_trends
 )
 
-saveRDS(final_results, "pca_clustering_analysis_A.rds")
-cat("✓ 結果已儲存至: pca_clustering_analysis_A.rds\n\n")
+saveRDS(final_results, "pca_clustering_analysis_B.rds")
+cat("✓ 結果已儲存至: pca_clustering_analysis_B.rds\n\n")
 
 cat(rep("=", 80), "\n")
 cat("分析完成\n")
-cat("共同國家:", length(common_countries), "| 分群數:", optimal_k, "\n")
+cat("共同國家:", length(country_code), "| 分群數:", optimal_k, "\n")
 cat("主成分: 經濟", pca_economic$n_components, 
     "| 制裁", pca_sanctional$n_components,
     "| 治理", pca_governance$n_components, "\n")
