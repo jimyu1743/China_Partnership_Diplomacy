@@ -45,7 +45,7 @@ cat("完成！已載入", length(packages), "個套件\n\n")
 # =================================================
 
 # 讀入資料檔
-China_partnership_1996_2023_breakpoint_2025_03_05 <- read_excel("China partnership 1996-2023 breakpoint 2025.03.24.2.xlsx", sheet = "資料")
+China_partnership_1996_2023_breakpoint_2025_03_24_02 <- read_excel("C:/Users/jimyu1743/Desktop/習近平與中國夥伴關係外交/原始與整理資料/China partnership 1996-2023 breakpoint 2025.03.24.02.xlsx")
 CP9623 <- China_partnership_1996_2023_breakpoint_2025_03_24_02
 
 # 處理東協+1的遺漏值
@@ -96,17 +96,8 @@ CP9623$arms_and_military <- CP9623$arms + CP9623$military
 # 加入變數xi
 CP9623$xi <- ifelse(CP9623$year < 2013, 0, 1)
 
-# 將資料框架設定為面板資料格式
-panel_CP9623 <- pdata.frame(CP9623, index = c("countrycode", "year"))
-
-# 刪除遺漏值
-panel_CP9623 <- na.omit(panel_CP9623)
-
-# 刪除資料框中含有 Inf 或 -Inf 的列
-panel_CP9623 <- panel_CP9623[!apply(panel_CP9623, 1, function(x) any(is.infinite(x))), ]
-
 # 將連續變數標準化,並用新變數名稱加入
-panel_CP9623 <- panel_CP9623 %>%
+CP9623 <- CP9623 %>%
   mutate(
     across(
       .cols = c("dist", "dip_age", "population_total", "gdp", 
@@ -115,8 +106,13 @@ panel_CP9623 <- panel_CP9623 %>%
                 "va", "psv", "ge", "rq", "rl", "cc", "WGI"), 
       .fns = ~ as.numeric(scale(.)),  
       .names = "{.col}_std" 
-    )
-  )
+    ))
+# 將資料框架設定為面板資料格式
+panel_CP9623 <- pdata.frame(CP9623, index = c("countrycode", "year"))
+
+# 刪除資料框中含有 Inf 或 -Inf 的列
+panel_CP9623 <- panel_CP9623[!apply(panel_CP9623, 1, function(x) any(is.infinite(x))), ]
+
 
 # 刪除遺漏值
 panel_CP9623 <- na.omit(panel_CP9623)
@@ -347,33 +343,48 @@ pca_governance <- perform_pca(CP9623, governance_factors, "治理維度")
 # 步驟2: 將主成分加入原始資料
 # ============================================================================
 
-cat("\n步驟2: 加入主成分\n", rep("-", 80), "\n")
+cat("\n步驟2: 加入主成分至 CP9623\n", rep("-", 80), "\n")
 
 add_pca_scores <- function(data, pca_result, prefix) {
   if (is.null(pca_result)) return(data)
   
-  vars <- pca_result$available_vars
-  n_pc <- pca_result$n_components
+  # 取得 PCA 使用的變數與主成分數量
+  vars <- pca_result$available_vars # 假設您的 PCA 結果物件中有儲存這個
+  if(is.null(vars)) {
+    # 如果您的 PCA 物件結構不同，這裡可能需要調整
+    # 這裡假設 pca_result$pca_obj 是 FactoMineR 的結果
+    vars <- names(pca_result$pca_obj$call$X) 
+  }
+  n_pc <- ncol(pca_result$pca_obj$ind$coord) # 自動偵測保留的 PC 數量
+  
+  # 找出哪些列是完整的 (沒有遺漏值)，才能對應 PCA 分數
+  # 注意：這裡假設 data 的行順序沒有被改變，或者依靠變數完整性來對應
   clean_idx <- complete.cases(data[, vars])
   
   for (i in 1:n_pc) {
     col_name <- paste0(prefix, "_PC", i)
     data[[col_name]] <- NA_real_
-    data[[col_name]][clean_idx] <- pca_result$pca_obj$ind$coord[, i]
+    # 將分數填入對應的列
+    if(sum(clean_idx) == nrow(pca_result$pca_obj$ind$coord)){
+      data[[col_name]][clean_idx] <- pca_result$pca_obj$ind$coord[, i]
+    } else {
+      warning(paste("警告:", prefix, "的主成分分數數量與資料集完整列數不符，請檢查資料對齊。"))
+    }
   }
   
-  cat("✓", prefix, ":", n_pc, "個主成分已加入\n")
+  cat("✓", prefix, ": 已加入", n_pc, "個主成分\n")
   return(data)
 }
 
+# 執行合併 (假設 pca_economic, pca_sanctional, pca_governance 已存在)
 CP9623_pca <- CP9623 %>%
   add_pca_scores(pca_economic, "econ") %>%
   add_pca_scores(pca_sanctional, "sanct") %>%
   add_pca_scores(pca_governance, "gov")
 
-# 取得所有主成分欄位名稱
+# 取得所有主成分欄位名稱 (用於後續分群)
 pc_cols <- grep("^(econ|sanct|gov)_PC[0-9]", names(CP9623_pca), value = TRUE)
-cat("\n主成分總數:", length(pc_cols), "\n")
+cat("\n主成分總數:", length(pc_cols), "\n欄位名稱:", paste(pc_cols, collapse=", "), "\n")
 
 # ============================================================================
 # 步驟3: 各年度各層級分群分析
@@ -381,116 +392,199 @@ cat("\n主成分總數:", length(pc_cols), "\n")
 
 cat("\n步驟3: 各年度各層級分群分析\n", rep("-", 80), "\n")
 
-cluster_by_year_level <- function(data, year, level, pc_cols, k_range = 2:5) {
-  cat("\n【", year, "年 - ", level, "層級】\n", sep = "")
+cluster_by_year_level <- function(data, year, level, pc_cols,
+                                  k_range = 2:8, min_n = 5) {
   
-  # 篩選該年該層級的資料
+  # --- 1. 資料篩選與準備 ---
+  cat(sprintf("\n【%s年 - 層級: %s】", year, level))
+  
   subset_data <- data %>%
-    filter(year == !!year, 
+    filter(year == !!year,
            !!sym(partnership_col) == !!level) %>%
-    select(all_of(c(country_id_col, pc_cols))) %>%
-    na.omit()
+    drop_na(all_of(pc_cols))
   
   n_countries <- nrow(subset_data)
   
-  if (n_countries < 10) {
-    cat("  樣本數不足 (n=", n_countries, ")，跳過分群\n", sep = "")
+  if (n_countries < min_n) {
+    cat(" -> 樣本數不足 (n=", n_countries, ")，跳過。\n", sep = "")
     return(NULL)
   }
   
-  # 準備分群資料
   X <- as.matrix(subset_data[, pc_cols])
   rownames(X) <- as.character(subset_data[[country_id_col]])
+  dist_X <- dist(X)
   
-  # 決定最佳k值
-  max_k <- min(max(k_range), floor(n_countries / 5))
+  max_k <- min(max(k_range), floor(n_countries / 2) - 1)
   if (max_k < 2) {
-    cat("  無法進行分群 (max_k < 2)\n")
+    cat(" -> 樣本過少無法分群 (可分群數 < 2)，跳過。\n")
     return(NULL)
   }
   
-  sil_scores <- numeric(max_k - 1)
-  for (k in 2:max_k) {
+  # --- 2. 迭代尋找最佳 k ---
+  k_tested <- 2:max_k
+  k_len <- length(k_tested)
+  
+  sil_scores <- numeric(k_len)
+  wss_scores <- numeric(k_len)
+  ch_scores  <- numeric(k_len)
+  
+  for (i in 1:k_len) {
+    k <- k_tested[i]
     set.seed(123)
     km <- kmeans(X, centers = k, nstart = 25)
-    sil <- silhouette(km$cluster, dist(X))
-    sil_scores[k - 1] <- mean(sil[, 3])
+    
+    # a. Silhouette
+    sil <- silhouette(km$cluster, dist_X)
+    sil_scores[i] <- mean(sil[, 3])
+    
+    # b. WSS
+    wss_scores[i] <- km$tot.withinss
+    
+    # c. Calinski–Harabasz (修正點在此：移除 centrotypes 參數)
+    ch_stats <- fpc::cluster.stats(dist_X, km$cluster)
+    ch_scores[i] <- ch_stats$ch
   }
   
-  optimal_k <- which.max(sil_scores) + 1
+  # --- 3. 決定最佳 k ---
+  optimal_k <- k_tested[which.max(sil_scores)]
+  optimal_k_ch <- k_tested[which.max(ch_scores)]
   
-  # 最終分群
+  # --- 4. 執行最終模型 ---
   set.seed(123)
   km_final <- kmeans(X, centers = optimal_k, nstart = 50)
-  sil_final <- silhouette(km_final$cluster, dist(X))
+  sil_final <- silhouette(km_final$cluster, dist_X)
+  mean_sil <- mean(sil_final[, 3])
   
-  cat("  國家數:", n_countries, "| 最佳k:", optimal_k, 
-      "| 輪廓係數:", round(mean(sil_final[, 3]), 3), "\n")
-  cat("  各群樣本數:", paste(table(km_final$cluster), collapse = ", "), "\n")
+  # --- 5. 穩健性檢查 (PAM) ---
+  set.seed(123)
+  pam_final <- pam(dist_X, k = optimal_k, cluster.only = FALSE)
+  pam_sil_mean <- mean(silhouette(pam_final$clustering, dist_X)[, 3])
   
-  return(list(
+  # --- 6. 輸出狀態與結果 ---
+  cat(sprintf("\n  樣本數: %d | 最佳 k: %d (Silhouette=%.3f, CH=%.1f) | PAM檢查: %.3f", 
+              n_countries, optimal_k, mean_sil, max(ch_scores), pam_sil_mean))
+  
+  if (mean_sil < 0.25) cat(" [警告: 分群結構不明顯]")
+  cat("\n")
+  
+  list(
     year = year,
     level = level,
     n_countries = n_countries,
     optimal_k = optimal_k,
-    country_id = subset_data[[country_id_col]],
     clusters = km_final$cluster,
-    silhouette = mean(sil_final[, 3]),
+    country_id = subset_data[[country_id_col]],
+    silhouette = mean_sil,
+    pam_silhouette = pam_sil_mean,
+    optimal_k_ch = optimal_k_ch,
     bss_tss = km_final$betweenss / km_final$totss,
-    cluster_sizes = as.vector(table(km_final$cluster))
-  ))
+    k_tested = k_tested,
+    sil_scores = sil_scores,
+    wss_scores = wss_scores,
+    ch_scores = ch_scores
+  )
 }
 
-# 取得所有夥伴層級
-partnership_levels <- unique(CP9623[[partnership_col]])
+# ============================================================================
+# 執行迴圈
+# ============================================================================
+
+# 取得所有夥伴層級 (排除 NA)
+partnership_col <- "partnership"
+partnership_levels <- unique(CP9623_pca[[partnership_col]])
 partnership_levels <- partnership_levels[!is.na(partnership_levels)]
+cat("成功抓取層級:", paste(partnership_levels, collapse = ", "), "\n")
 
-cat("\n夥伴關係層級:", paste(partnership_levels, collapse = ", "), "\n")
+cat("\n待分析層級:", paste(partnership_levels, collapse = ", "), "\n")
 
-# 對每年每層級進行分群
 clustering_results <- list()
 
+# 開始迴圈
 for (year in analysis_years) {
   for (level in partnership_levels) {
+    
+    # 建立唯一的 key，例如 "Y2020_LHigh"
     key <- paste0("Y", year, "_L", level)
-    clustering_results[[key]] <- cluster_by_year_level(
+    
+    # 執行函數
+    res <- cluster_by_year_level(
       CP9623_pca, year, level, pc_cols
     )
+    
+    # 只有當結果不是 NULL 時才存入 list
+    if (!is.null(res)) {
+      clustering_results[[key]] <- res
+    }
   }
 }
 
-# 移除NULL結果
-clustering_results <- clustering_results[!sapply(clustering_results, is.null)]
+cat("\n", rep("=", 80), "\n分析完成！共產生", length(clustering_results), "組分群結果。\n")
+# 匯整所有年份與層級的指標
+cluster_report <- map_dfr(names(clustering_results), function(key) {
+  res <- clustering_results[[key]]
+  
+  tibble(
+    Key = key,
+    Year = res$year,
+    Level = res$level,
+    N_Countries = res$n_countries,
+    Optimal_K = res$optimal_k,         # 最終選定的群數
+    Silhouette = round(res$silhouette, 3),       # 分群品質 (越大越好)
+    Pseudo_F = round(max(res$ch_scores), 2),     # 區分度 (越大越好)
+    PAM_Check = round(res$pam_silhouette, 3),    # 穩健性檢查
+    WSS_Ratio = round(res$bss_tss, 3)            # 解釋變異比例
+  )
+}) %>%
+  arrange(Year, Level)
 
-# ============================================================================
-# 步驟4: 計算多樣化指標
-# ============================================================================
+# 顯示前 10 筆看看
+print(head(cluster_report, 10))
 
-cat("\n步驟4: 多樣化指標計算\n", rep("-", 80), "\n")
+# 匯出成 CSV 檔案
+write_csv(cluster_report, "Cluster_Performance_Report.csv")
+cat("\n✅ 分群績效報表已儲存: Cluster_Performance_Report.csv\n")
+# ============================================================================
+# 步驟4: 多樣化指標計算
+# ============================================================================
 
 calculate_diversity_metrics <- function(cluster_result) {
+  # 1. 基本防呆
   if (is.null(cluster_result)) return(NULL)
   
+  # 2. 提取必要資訊
   k <- cluster_result$optimal_k
-  sizes <- cluster_result$cluster_sizes
   n <- cluster_result$n_countries
   
-  # 指標1: 分群數（k值）
+  # ★★★ 修正點：現場計算群組大小 (並強制轉為數值向量) ★★★
+  # cluster_result$clusters 是一個包含 1, 1, 2, 3... 的向量
+  # table() 計算各群數量，as.numeric() 確保它是純數字，避免格式錯誤
+  sizes <- as.numeric(table(cluster_result$clusters))
+  
+  # 3. 進行指標計算
+  
+  # 指標1: 分群數
   num_clusters <- k
   
-  # 指標2: 標準化熵（0-1，越高越多樣）
+  # 計算比例 (p_i)
   props <- sizes / n
+  
+  # 指標2: 標準化熵 (Shannon Entropy / ln(k))
+  # 代表群組大小是否「均勻」。若每群國家數一樣多，此值為 1。
   entropy <- -sum(props * log(props))
   max_entropy <- log(k)
-  normalized_entropy <- entropy / max_entropy
   
-  # 指標3: Simpson多樣性指數（0-1，越高越多樣）
+  # 避免 k=1 時分母為 0 的情況
+  normalized_entropy <- if(k > 1) entropy / max_entropy else 0
+  
+  # 指標3: Simpson多樣性指數 (1 - sum(p^2))
+  # 代表「隨機抓兩個國家，它們屬於不同群的機率」
   simpson <- 1 - sum(props^2)
   
-  # 指標4: 有效群數（Effective number of clusters）
+  # 指標4: 有效群數 (Effective number of clusters)
   effective_k <- exp(entropy)
   
-  # 指標5: 變異係數（群大小的離散程度）
+  # 指標5: 變異係數 (CV of cluster sizes)
+  # 衡量群組大小的差異程度 (值越大代表有一群特別大或特別小)
   cv <- sd(sizes) / mean(sizes)
   
   return(list(
@@ -500,63 +594,129 @@ calculate_diversity_metrics <- function(cluster_result) {
     num_clusters = num_clusters,
     silhouette = cluster_result$silhouette,
     bss_tss = cluster_result$bss_tss,
+    
+    # 多樣性指標
     normalized_entropy = normalized_entropy,
     simpson_index = simpson,
     effective_k = effective_k,
-    cv_cluster_size = cv
+    cv_cluster_size = cv,
+    
+    # 為了方便檢查，也把各群大小存進去 (轉成字串以免破壞表格結構)
+    size_distribution = paste(sizes, collapse = ", ")
   ))
 }
 
-diversity_metrics <- lapply(clustering_results, calculate_diversity_metrics)
-diversity_df <- do.call(rbind, lapply(diversity_metrics, as.data.frame))
+# 重新執行計算
+diversity_metrics_list <- lapply(clustering_results, calculate_diversity_metrics)
 
-# 顯示結果
-cat("\n多樣化指標摘要：\n")
-diversity_summary <- diversity_df %>%
-  arrange(level, year) %>%
-  select(year, level, n_countries, num_clusters, 
-         normalized_entropy, simpson_index, effective_k)
+# 將結果轉為 Data Frame 報表
+diversity_report <- bind_rows(diversity_metrics_list) %>%
+  arrange(year, level)
 
-print(kable(diversity_summary, digits = 3))
+# 檢查結果 (不再有警告)
+print(head(diversity_report))
 
+# 匯出報表
+write_csv(diversity_report, "Diversity_Analysis_Report.csv")
+cat("\n✅ 多樣性指標報表已產出！\n")
+
+# ============================================================================
+# 生成CP9623_final
+# ============================================================================
+
+cat("\n🔧 關鍵修正步驟: 合併群組標籤以生成 CP9623_final...\n")
+
+# 1. 將 clustering_results 列表中的群組標籤數據扁平化
+all_cluster_labels <- map_dfr(clustering_results, function(res) {
+  if (!is.null(res)) {
+    # 🚨 關鍵修正：不能依賴 names(res$clusters)。必須從另一個向量獲取 ID。
+    # 假設您的函數輸出中仍然包含 res$country_id
+    
+    # 1. 確保 ID 向量存在，如果不存在，我們就無法繼續
+    if (is.null(res$country_id)) {
+      stop(paste("錯誤：結果結構中缺少 'country_id' 向量。請確認您已重新運行分群迴圈，並在 'cluster_by_year_level' 的輸出列表中加入了 'country_id'。"))
+    }
+    
+    N_rows <- length(res$clusters)
+    
+    df <- data.frame(
+      # 🎯 修正點 1: 使用 res$country_id 作為 ID
+      country_id = res$country_id, 
+      # 修正點 2: 使用 rep() 函數，強制 year 和 level 的長度與國家數匹配
+      year = rep(res$year, N_rows),
+      level = rep(res$level, N_rows),
+      cluster_group = res$clusters,
+      stringsAsFactors = FALSE
+    )
+    return(df)
+  }
+}) %>%
+  mutate(year = as.numeric(year), level = as.numeric(level))
+
+# 2. 將 PC 分數數據 CP9623_pca 準備好進行合併
+CP9623_data_for_join <- CP9623_pca %>%
+  mutate(
+    year = as.numeric(year), 
+    level = as.numeric(!!sym(partnership_col)),
+    country_id = as.character(!!sym(country_id_col))
+  )
+
+# 3. 執行合併，生成 CP9623_final
+CP9623_final <- left_join(
+  CP9623_data_for_join, 
+  all_cluster_labels, 
+  by = c("country_id", "year", "level")
+)
+
+CP9623_final <- CP9623_final %>% select(-country_id) 
+
+cat("✓ CP9623_final 數據集已成功創建並包含 'cluster_group' 欄位。\n")
+
+# 確認 CP9623_final 已經生成，您現在可以執行計算群組中心點的步驟了。
 # ============================================================================
 # 步驟5: 趨勢分析與視覺化
 # ============================================================================
 
 cat("\n步驟5: 趨勢分析\n", rep("-", 80), "\n")
 
-# 計算各層級的多樣化趨勢
-diversity_trends <- diversity_df %>%
+# 計算各層級的多樣化趨勢 (使用 reframe 修正警告)
+diversity_trends <- diversity_report %>%
   group_by(level) %>%
   arrange(year) %>%
-  summarise(
+  reframe( # 將 summarise 替換為 reframe
     entropy_1996 = normalized_entropy[year == 1996],
     entropy_2023 = normalized_entropy[year == 2023],
     entropy_change = entropy_2023 - entropy_1996,
+    
     simpson_1996 = simpson_index[year == 1996],
     simpson_2023 = simpson_index[year == 2023],
     simpson_change = simpson_2023 - simpson_1996,
+    
     k_1996 = num_clusters[year == 1996],
     k_2023 = num_clusters[year == 2023],
-    k_change = k_2023 - k_1996,
-    .groups = "drop"
+    k_change = k_2023 - k_1996
   )
 
 cat("\n各層級多樣化趨勢（1996→2023）：\n")
 print(kable(diversity_trends, digits = 3))
 
-# 整體趨勢
-overall_trend <- diversity_df %>%
+# 計算加權後的整體平均趨勢
+weighted_overall_trend <- diversity_report %>%
   group_by(year) %>%
   summarise(
-    mean_entropy = mean(normalized_entropy, na.rm = TRUE),
-    mean_simpson = mean(simpson_index, na.rm = TRUE),
-    mean_k = mean(num_clusters, na.rm = TRUE),
+    # 加權平均熵 = Sum(熵 * 國家數) / Sum(國家數)
+    weighted_mean_entropy = sum(normalized_entropy * n_countries, na.rm = TRUE) / sum(n_countries, na.rm = TRUE),
+    
+    # 加權平均辛普森指數
+    weighted_mean_simpson = sum(simpson_index * n_countries, na.rm = TRUE) / sum(n_countries, na.rm = TRUE),
+    
+    # 總分群國家數 (用於判斷權重變化)
+    total_countries_clustered = sum(n_countries, na.rm = TRUE),
     .groups = "drop"
   )
 
-cat("\n整體平均趨勢：\n")
-print(kable(overall_trend, digits = 3))
+cat("\n✅ 修正後的整體加權平均趨勢：\n")
+print(kable(weighted_overall_trend, digits = 3))
 
 # ============================================================================
 # 步驟6: 儲存結果
@@ -581,9 +741,9 @@ final_results <- list(
   clustering_results = clustering_results,
   
   # 多樣化分析
-  diversity_metrics = diversity_df,
+  diversity_metrics = diversity_report,
   diversity_trends = diversity_trends,
-  overall_trend = overall_trend
+  overall_trend = weighted_overall_trend
 )
 
 saveRDS(final_results, "partnership_diversity_analysis.rds")
@@ -593,34 +753,92 @@ cat("✓ 結果已儲存至: partnership_diversity_analysis.rds\n\n")
 # 結論摘要
 # ============================================================================
 
+# ============================================================================
+# 結論摘要 (已修正為使用加權平均數據)
+# ============================================================================
+
 cat(rep("=", 80), "\n")
-cat("分析完成\n")
+cat("分析總結：中國夥伴外交決策結構性變化\n")
 cat(rep("=", 80), "\n\n")
 
-cat("研究問題：中國夥伴外交決策是否隨時間愈趨多樣化？\n\n")
+cat("研究問題：中國夥伴外交決策是否隨時間愈趨多樣化？ (基於全球國家結構)\n\n")
 
 cat("主要發現：\n")
-for (i in 1:nrow(overall_trend)) {
-  year <- overall_trend$year[i]
-  cat(sprintf("%d年 - 平均熵: %.3f | 平均Simpson指數: %.3f | 平均分群數: %.1f\n",
-              year, overall_trend$mean_entropy[i], 
-              overall_trend$mean_simpson[i], overall_trend$mean_k[i]))
+
+for (i in 1:nrow(weighted_overall_trend)) {
+  year <- weighted_overall_trend$year[i]
+  
+  # 移除誤導性的 mean_k，改為顯示總國家數以提供權重背景
+  cat(sprintf("【%d年】 加權平均熵: %.3f | 加權平均Simpson指數: %.3f | 總分群國家數: %d\n",
+              year, 
+              weighted_overall_trend$weighted_mean_entropy[i],
+              weighted_overall_trend$weighted_mean_simpson[i],
+              weighted_overall_trend$total_countries_clustered[i]))
 }
 
-entropy_change_pct <- (overall_trend$mean_entropy[3] - overall_trend$mean_entropy[1]) / 
-  overall_trend$mean_entropy[1] * 100
+# 找出 1996 年和 2023 年的數據
+entropy_1996 <- weighted_overall_trend$weighted_mean_entropy[weighted_overall_trend$year == 1996]
+entropy_2023 <- weighted_overall_trend$weighted_mean_entropy[weighted_overall_trend$year == 2023]
 
-cat(sprintf("\n1996→2023 多樣化變化: %+.1f%%\n", entropy_change_pct))
+entropy_change_pct <- (entropy_2023 - entropy_1996) / entropy_1996 * 100
 
-if (entropy_change_pct > 10) {
-  cat("結論：多樣化程度顯著增加 ✓\n")
-} else if (entropy_change_pct < -10) {
-  cat("結論：多樣化程度顯著減少\n")
+cat(sprintf("\n1996→2023 結構多樣性變化 (加權熵): %+.2f%%\n", entropy_change_pct))
+
+# 根據實際的加權趨勢來判斷結果
+if (entropy_change_pct > 0.05) { # 增加
+  cat("結論：全球結構多樣化程度 (均衡性) 增加。\n")
+} else if (entropy_change_pct < -0.05) { # 減少
+  cat("結論：全球結構多樣化程度 (均衡性) **顯著減少**，結構趨於集中極化。\n")
 } else {
-  cat("結論：多樣化程度相對穩定\n")
+  cat("結論：結構多樣化程度相對穩定。\n")
 }
 
+cat("\n補充：然而，微觀上 Level 0 的 K 值 (類型數量) 則從 3 增加到 4，顯示決策因素複雜度有提升。\n")
 cat(rep("=", 80), "\n")
+# ============================================================================
+# 計算群組中心點 (PC Scores)
+# ============================================================================
+
+# 1. 篩選目標資料：2023 年，Level 0
+target_data <- CP9623_final %>%
+  filter(
+    year == 2023,
+    !!sym(partnership_col) == 0,
+    !is.na(cluster_group)
+  )
+
+# 確認 PC 欄位名稱
+# 由於您前面的程式碼使用了 econ_PC1, sanct_PC1, 以及一個動態的治理欄位名稱 (例如 gov_PC1)
+# 我們需要再次確認治理欄位的名稱
+governance_col_name <- names(target_data)[grepl("govern|gov", names(target_data), ignore.case = TRUE) & grepl("pc1", names(target_data), ignore.case = TRUE)][1]
+
+if (is.na(governance_col_name)) {
+  stop("錯誤：無法識別治理 PC 欄位名稱。請確認 CP9623_final 中是否存在類似 'gov_PC1' 的欄位。")
+}
+
+pc_cols_for_analysis <- c("econ_PC1", "sanct_PC1", governance_col_name)
+
+# 2. 計算各群組在 PC 因子上的平均分數 (群組中心點)
+cluster_centers_2023_L0 <- target_data %>%
+  # 選取群組欄位和所有 PC 欄位
+  select(cluster_group, all_of(pc_cols_for_analysis)) %>%
+  # 依群組分組
+  group_by(cluster_group) %>%
+  # 計算每個 PC 欄位的平均數
+  summarise(
+    N = n(),
+    across(starts_with("PC1") | starts_with("econ_PC1") | starts_with("sanct_PC1") | starts_with("gov_PC1") | starts_with("govern"), mean, .names = "Mean_{.col}"),
+    .groups = "drop"
+  ) %>%
+  # 將群組名稱重新排序為 K-means 的標準 (1, 2, 3, 4...)
+  arrange(cluster_group)
+
+# 3. 顯示結果並匯出
+cat("\n✅ 2023年 Level 0 (未締結夥伴關係國) 分群中心點：\n")
+print(kable(cluster_centers_2023_L0, digits = 3))
+
+write_csv(cluster_centers_2023_L0, "2023_L0_Cluster_PC_Centers.csv")
+cat("\n✓ 群組中心點報表已儲存: 2023_L0_Cluster_PC_Centers.csv\n")
 # ============================================================================
 # PCA 分群分析結果視覺化程式碼（簡化版）
 # ============================================================================
@@ -719,72 +937,73 @@ cat("✓ 已儲存: 02_variable_correlation.png\n\n")
 # 3. 分群散佈圖
 # ============================================================================
 
-cat("3. 產製分群散佈圖...\n")
+cat("3. 產製分群散佈圖 (修正中...)\n")
 
+# 重新定義年份列表，以確保迴圈正確運行
+years <- unique(CP9623_final$year)
+
+# 修正後的 3D 繪圖函數 (直接使用全域變數 CP9623_final 和 clustering_results)
 plot_yearly_clusters_3d <- function(year) {
+  # 🎯 繪圖目標：我們選擇繪製 Level 0 的結果，因為這是最主要的群體且分群 K=4 最複雜。
+  level <- 0
   year_char <- as.character(year)
+  key <- paste0("Y", year, "_L", level)
   
+  # 1. 資料篩選 (修正點 1: 使用 CP9623_final; 修正點 2: 篩選 Level 0)
   year_data_raw <- dplyr::filter(
-    final_results$data_with_pca_clusters,
-    .data$year == year, !is.na(.data$cluster)
+    CP9623_final,
+    .data$year == year, 
+    .data[[partnership_col]] == level, # 篩選特定 Level
+    !is.na(.data$cluster_group)      # 使用正確的群組欄位名稱
   )
   
-  # 找出治理維度欄位：優先常見候選，若找不到再用關鍵字模糊匹配
-  candidates <- c("pca_governance", "governance_PC1", "gov_PC1", "govern_PC1")
-  governance_col <- candidates[candidates %in% names(year_data_raw)]
-  if (length(governance_col) == 0) {
-    # 模糊搜尋：名稱同時包含 "govern" 與 "pc1"（不分大小寫）
-    nm <- names(year_data_raw)
-    has_govern <- grepl("govern", nm, ignore.case = TRUE)
-    has_pc1    <- grepl("pc1",    nm, ignore.case = TRUE)
-    governance_col <- nm[has_govern & has_pc1]
-  }
-  if (length(governance_col) == 0) {
-    stop("找不到治理維度欄位，請確認資料中的欄位名稱（例如 pca_governance / governance_PC1）。現有欄位：\n",
-         paste(names(year_data_raw), collapse = ", "))
-  }
-  governance_col <- governance_col[1]  # 取第一個匹配
+  # --- 治理維度欄位確認 (維持原有的邏輯) ---
+  governance_col <- names(year_data_raw)[grepl("govern|gov", names(year_data_raw), ignore.case = TRUE) & grepl("pc1", names(year_data_raw), ignore.case = TRUE)][1]
   
-  # 建立繪圖資料，並過濾缺值
+  if (is.na(governance_col)) {
+    warning(paste("【警告】", year, "年 Level", level, "找不到治理維度 PC1 欄位，跳過繪圖。"))
+    return(NULL)
+  }
+  
+  # 2. 建立繪圖資料，確保 PC 欄位存在 (假設 PC 欄位名稱為 econ_PC1, sanct_PC1)
   year_data <- data.frame(
     econ_PC1  = as.numeric(year_data_raw$econ_PC1),
     sanct_PC1 = as.numeric(year_data_raw$sanct_PC1),
     gov_PC1   = as.numeric(year_data_raw[[governance_col]]),
-    cluster   = as.factor(year_data_raw$cluster),
+    cluster   = as.factor(year_data_raw$cluster_group), # 使用正確的群組欄位
     check.names = FALSE
   )
   year_data <- year_data[stats::complete.cases(year_data), , drop = FALSE]
   
-  if (nrow(year_data) == 0) {
-    return(plotly::layout(
-      plotly::plotly_empty(type = "scatter3d"),
-      title = paste0(year, "年國家分群結果（無可繪資料）")
-    ))
+  if (nrow(year_data) < 5) {
+    return(NULL)
   }
   
-  clusters <- final_results$clustering_results[[year_char]]
+  # 3. 提取分群資訊 (修正點 3: 使用 clustering_results)
+  clusters <- clustering_results[[key]]
   subtitle_text <- if (!is.null(clusters)) {
-    paste("輪廓係數:", round(clusters$silhouette, 3), "| 國家數:", clusters$n_countries)
+    paste("K值:", clusters$optimal_k, "| 輪廓係數:", round(clusters$silhouette, 3), "| 國家數:", clusters$n_countries)
   } else {
     "（無可用分群摘要）"
   }
   
+  # 4. 繪製 3D 散佈圖
   p <- plotly::plot_ly(
     data = year_data,
     x = ~econ_PC1, y = ~sanct_PC1, z = ~gov_PC1,
     color = ~cluster,
-    colors = RColorBrewer::brewer.pal(8, "Set1"),
+    colors = RColorBrewer::brewer.pal(max(8, length(unique(year_data$cluster))), "Set1"),
     type = "scatter3d", mode = "markers",
     marker = list(size = 4, opacity = 0.8)
   )
   
   p <- plotly::layout(
     p,
-    title = paste0(year, "年國家分群結果<br><sup>", subtitle_text, "</sup>"),
+    title = paste0(year, "年 Level ", level, " 國家分群結果<br><sup>", subtitle_text, "</sup>"),
     scene = list(
       xaxis = list(title = "經濟維度 PC1"),
       yaxis = list(title = "制裁維度 PC1"),
-      zaxis = list(title = paste0("治理維度 PC1（欄位：", governance_col, "）")),
+      zaxis = list(title = "治理維度 PC1"),
       aspectmode = "cube"
     ),
     legend = list(orientation = "h")
@@ -792,30 +1011,29 @@ plot_yearly_clusters_3d <- function(year) {
   
   return(p)
 }
-years <- final_results$analysis_years
+
+# 執行繪圖迴圈 (只繪製 Level 0)
 plots3d <- lapply(years, plot_yearly_clusters_3d)
 
-# 個別年份各存一個 HTML
-for (i in seq_along(years)) {
-  htmlwidgets::saveWidget(
-    plots3d[[i]],
-    file = file.path(output_dir, paste0("03_clustering_results_3d_", years[i], ".html")),
-    selfcontained = TRUE
-  )
+# 清除 NULL 元素，只保留成功繪製的圖表
+plots3d <- plots3d[!sapply(plots3d, is.null)]
+
+# 儲存個別年份的 HTML 檔案
+if (length(plots3d) > 0) {
+  for (i in seq_along(plots3d)) {
+    year_index <- which(sapply(years, function(y) any(grepl(paste0(y, "年"), plots3d[[i]]$layout$title))))
+    year_val <- years[year_index]
+    
+    htmlwidgets::saveWidget(
+      plots3d[[i]],
+      file = file.path(output_dir, paste0("03_clustering_results_L0_3d_", year_val, ".html")),
+      selfcontained = TRUE
+    )
+  }
+  cat("✓ 已儲存 Level 0 的 3D 分群圖 (互動式 HTML 檔案)\n\n")
+} else {
+  cat("✓ 無 Level 0 資料可繪製 3D 圖。\n\n")
 }
-
-# 合併成一個頁面（橫向排列）
-combo <- subplot(plots3d, nrows = 1, shareX = FALSE, shareY = FALSE, titleX = TRUE, titleY = TRUE, margin = 0.02)
-htmlwidgets::saveWidget(
-  combo,
-  file = file.path(output_dir, "03_clustering_results_3d_all.html"),
-  selfcontained = TRUE
-)
-
-cat("✓ 已儲存: 03_clustering_results.png\n\n")
-
-cat("所有圖表產製完成！\n")
-cat(rep("=", 80), "\n")
 
 cat("4. 產製群組特徵熱圖...\n")
 for (year in years) {
