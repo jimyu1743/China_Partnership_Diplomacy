@@ -116,9 +116,9 @@ CP9623$xi <- ifelse(CP9623$year < 2013, 0, 1)
 CP9623 <- CP9623 %>%
   mutate(
     across(
-      .cols = c("dist", "dip_age", "population_total", "gdp", 
+      .cols = c("dist", "dip_age", "population_total", "gdp", "gdp_per_capita",
                 "china_ex_to_i", "china_im_fr_i", "exportdep", "importdep", 
-                "trade", "arms", "military", "financial", "travel",
+                "trade", "arms", "military", "financial", "travel","WGI",
                 "va", "psv", "ge", "rq", "rl", "cc", "WGI"), 
       .fns = ~ as.numeric(scale(.)),  
       .names = "{.col}_std" 
@@ -335,14 +335,37 @@ data_filtered <- CP9623_pca %>%
 
 # 定義分群變數
 
-# 定義分群變數
+#============================================
+# 定義分群變數A
+
 cluster_vars <- c(
-  "partnership",  # 保留此變數
-  # PCA 主成分變數
+  "partnership",  
+  "exportdep_std", "importdep_std", "population_total_std",
+  "gdp_per_capita_std", "WGI",
   "econ_PC1", "econ_PC2", "econ_PC3", 
   "sanct_PC1", "sanct_PC2", 
-  "gov_PC1",
-  # 地緣政治/外交變數
+  "gov_PC1", "WGI",
+  "FTA", "ORG", "dip_age_std", "dist_std"
+)
+
+# ===========================================
+# 定義分群變數B
+
+cluster_vars <- c(
+  "partnership",  
+  "econ_PC1", "econ_PC2", "econ_PC3", 
+  "sanct_PC1", "sanct_PC2", 
+  "gov_PC1","WGI",
+  "FTA", "ORG", "dip_age_std", "dist_std"
+)
+
+#============================================
+# 定義分群變數C
+
+cluster_vars <- c(
+  "partnership",
+  "exportdep_std", "importdep_std", "population_total_std",
+  "gdp_per_capita_std", "WGI",
   "FTA", "ORG", "dip_age_std", "dist_std"
 )
 
@@ -404,44 +427,40 @@ plot(kmeans_stats$k, kmeans_stats$calinski_harabasz, type = "b",
 
 par(mfrow = c(1, 1))
 
-# ==========================================================
-# 提取 K=4 的分群結果
-# ==========================================================
-# 提取k=4的分群結果 (將變數名稱從 km4 調整為 km_final 或保持 km4)
-# 注意：您的原始程式碼中提取的是 km4 <- kmeans_results$k4，但接下來用的是 km6。
-# 這裡我們統一使用 k4 的結果。
-km_final <- kmeans_results$k4
+
+# 提取最適分群結果
+km_final <- kmeans_results$k3
 
 # ==========================================================
 # 將分群結果標籤添加回資料
 # ==========================================================
-# 添加新的分群標籤變數 (建議命名為 cluster_k4)
-data_complete$cluster_k4 <- km_final$cluster
+# 添加新的分群標籤變數
+data_complete$cluster_k3 <- km_final$cluster
 
 # ==========================================================
-# 輸出 K=4 的分群結果
+# 輸出最適分群結果
 # ==========================================================
-cat("\n=== K-means (k=4) 分群結果 ===\n")
+cat("\n=== K-means (k=3) 分群結果 ===\n")
 cat("1996年:\n")
 # 輸出 cluster_k4 在 1996 年的分佈
-print(table(data_complete$cluster_k4[data_complete$year == 1996])) 
+print(table(data_complete$cluster_k3[data_complete$year == 1996])) 
 cat("\n2013年:\n")
 # 輸出 cluster_k4 在 2013 年的分佈
-print(table(data_complete$cluster_k4[data_complete$year == 2013]))
+print(table(data_complete$cluster_k3[data_complete$year == 2013]))
 cat("\n2023年:\n")
 # 輸出 cluster_k4 在 2023 年的分佈
-print(table(data_complete$cluster_k4[data_complete$year == 2023]))
-# 1. 提取 K=4 的群體標籤
-km_final <- kmeans_results$k4
-data_complete$cluster_k4 <- km_final$cluster
+print(table(data_complete$cluster_k3[data_complete$year == 2023]))
+# 1. 提取群體標籤
+km_final <- kmeans_results$k3
+data_complete$cluster_k3 <- km_final$cluster
 
 # 2. 計算每個群體在所有分群變數上的平均值 (使用 dplyr)
 cluster_profiles <- data_complete %>%
-  # 確保 cluster_k4 是因子 (Factor) 類型以便分組
-  mutate(cluster_k4 = factor(cluster_k4)) %>%
+  # 確保 cluster_k8 是因子 (Factor) 類型以便分組
+  mutate(cluster_k3 = factor(cluster_k3)) %>%
   
   # 按群體標籤分組
-  group_by(cluster_k4) %>%
+  group_by(cluster_k3) %>%
   
   # 計算 cluster_vars 中所有變數的平均值
   summarise(
@@ -450,20 +469,19 @@ cluster_profiles <- data_complete %>%
   ) %>%
   ungroup()
 
-cat("\n=== K=4 群體特徵分析 (變數平均值) ===\n")
+cat("\n=== K=3 群體特徵分析 (變數平均值) ===\n")
 print(cluster_profiles)
 # 重新印出完整的表格，設置 options 讓 R 不會省略欄位
 options(max.print = 9999) # 確保輸出的長度足夠
 print(cluster_profiles, width = Inf) # 使用 width = Inf 確保所有欄位都顯示
 # --- 輸出群體特徵分析結果 (K=4) ---
-# 檔名：Cluster_Profiles_K4.csv
 # row.names = FALSE 是為了避免將 R 的行號也寫入 CSV 中
 write.csv(
   cluster_profiles,
-  file = "Cluster_Profiles_K4.csv",
+  file = "Cluster_Profiles_A.csv",
   row.names = FALSE
 )
-cat("已將 K=4 群體特徵分析結果輸出至 Cluster_Profiles_K4.csv\n")
+cat("已將 K=3 群體特徵分析結果輸出至 Cluster_Profiles_K3.csv\n")
 
 # --- 輸出 K 值評估指標結果 (K-means) ---
 # 檔名：Kmeans_Evaluation_Stats.csv
@@ -494,30 +512,30 @@ cat("\nK-medians (PAM) 評估指標:\n")
 print(kmedian_stats)
 
 # ------------------------------------------------------------------
-# 提取 K=3 的分群結果
+# 提取 K=2 的分群結果
 # ------------------------------------------------------------------
-# 提取k=3的分群結果 (從 kmedian_results$k3)
-pam3 <- kmedian_results$k3
+# 提取k=2的分群結果 (從 kmedian_results$k3)
+pam2 <- kmedian_results$k2
 
 # ------------------------------------------------------------------
 # 將分群結果標籤添加回資料
 # ------------------------------------------------------------------
 # 添加新的分群標籤變數 (建議命名為 cluster_pam3)
-data_complete$cluster_pam3 <- pam3$clustering
+data_complete$cluster_pam2 <- pam2$clustering
 
 # ------------------------------------------------------------------
 # 輸出 K=3 的分群結果
 # ------------------------------------------------------------------
-cat("\n=== K-medians (k=3) 分群結果 ===\n")
+cat("\n=== K-medians (k=2) 分群結果 ===\n")
 cat("1996年:\n")
 # 輸出 cluster_pam3 在 1996 年的分佈
-print(table(data_complete$cluster_pam3[data_complete$year == 1996]))
+print(table(data_complete$cluster_pam2[data_complete$year == 1996]))
 cat("\n2013年:\n")
 # 輸出 cluster_pam3 在 2013 年的分佈
-print(table(data_complete$cluster_pam3[data_complete$year == 2013]))
+print(table(data_complete$cluster_pam2[data_complete$year == 2013]))
 cat("\n2023年:\n")
 # 輸出 cluster_pam3 在 2023 年的分佈
-print(table(data_complete$cluster_pam3[data_complete$year == 2023]))
+print(table(data_complete$cluster_pam2[data_complete$year == 2023]))
 
 # ============================================================================
 # 6. 進階視覺化
@@ -533,11 +551,11 @@ nb <- NbClust(X, distance = "euclidean", min.nc = 2, max.nc = 15,
               method = "kmeans", index = "all")
 
 # 視覺化k=3的分群結果（使用PCA降維）
-fviz_cluster(km3, data = X, 
+fviz_cluster(km2, data = X, 
              geom = "point",
              ellipse.type = "convex",
              palette = "jco",
-             main = "K-means Clustering (k=4)",
+             main = "K-means Clustering (k=2)",
              ggtheme = theme_minimal())
 
 # Silhouette plot
@@ -563,7 +581,6 @@ grid.arrange(grobs = plots, ncol = 3)
 
 # 儲存最終結果
 saveRDS(data_complete, file = "clustering_results.rds")
-
 cat("\n✓ 分群分析完成！\n")
 cat("結果已儲存至: clustering_results.rds\n")
 cat(rep("=", 80), "\n")
