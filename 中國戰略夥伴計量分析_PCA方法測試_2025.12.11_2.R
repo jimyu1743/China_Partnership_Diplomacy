@@ -1,6 +1,6 @@
-# ============================================================================
-# 1. 套件管理
-# ============================================================================
+# ============================================================
+# 0. 環境設定與套件載入
+# ============================================================
 
 # 設定套件路徑
 lib_path <- "D:/R/library"
@@ -8,18 +8,23 @@ dir.create(lib_path, recursive = TRUE, showWarnings = FALSE)
 .libPaths(c(lib_path, .libPaths()))
 options(repos = c(CRAN = "https://cran.rstudio.com/"))
 
-# 定義套件清單
+# 定義套件清單 (已加入 flexclust)
 packages <- c(
-  # 核心套件
+  # --- 核心套件 ---
   "tidyverse", "magrittr",
-  # 資料處理
+  
+  # --- 資料處理 ---
   "plm", "haven", "readr", "readxl", "openxlsx", "writexl",
-  # 統計分析
+  
+  # --- 統計分析 ---
   "ExtremeBounds", "car", "ordinal", "MASS", "mvProbit", "psych", 
   "pglm", "pastecs",
-  # 因素分析與分群
-  "FactoMineR", "factoextra", "GPArotation", "cluster", "NbClust",
-  # 工具
+  
+  # --- 因素分析與分群 (重點區塊) ---
+  "FactoMineR", "factoextra", "GPArotation", "cluster", "NbClust", 
+  "flexclust",  # <--- 新增這裡：這是執行 kcca/kmedians 必須的套件
+  
+  # --- 工具 ---
   "usdm", "knitr", "kableExtra", "gridExtra", "gapminder"
 )
 
@@ -37,13 +42,18 @@ if (length(missing) > 0) {
 # 載入套件
 cat("\n載入套件...\n")
 invisible(lapply(packages, function(pkg) {
-  suppressPackageStartupMessages(library(pkg, character.only = TRUE))
+  # 使用 tryCatch 避免單一套件載入失敗導致程式中斷
+  tryCatch({
+    suppressPackageStartupMessages(library(pkg, character.only = TRUE))
+  }, error = function(e) {
+    cat("載入失敗:", pkg, "\n")
+  })
 }))
 
 cat("完成！已載入", length(packages), "個套件\n\n")
 
 # ============================================================================
-# 2. 資料讀取與前處理
+# 1. 資料讀取與前處理
 # ============================================================================
 
 cat("\n", rep("=", 80), "\n")
@@ -54,7 +64,7 @@ cat(rep("=", 80), "\n\n")
 China_partnership_1996_2023_breakpoint_2025_03_24_02 <- read_excel(
   "C:/Users/jimyu1743/Desktop/習近平與中國夥伴關係外交/原始與整理資料/China partnership 1996-2023 breakpoint 2025.03.24.02.xlsx"
 )
-CP9623 <- China_partnership_1996_2023_breakpoint_2025_03_24_02
+CP9623 <- China_partnership_1996_2023_breakpoint_2025_12_13
 
 cat("原始資料:", nrow(CP9623), "筆觀察值\n")
 
@@ -108,14 +118,15 @@ CP9623$arms_and_military <- CP9623$arms + CP9623$military
 # 加入習近平時期變數
 CP9623$xi <- ifelse(CP9623$year < 2013, 0, 1)
 
-# 標準化連續變數
+# 標準化指定變數
 CP9623 <- CP9623 %>%
   mutate(
     across(
       .cols = c("dist", "dip_age", "population_total", "gdp", "gdp_per_capita",
                 "china_ex_to_i", "china_im_fr_i", "exportdep", "importdep", 
+                "economy","arms_and_military",
                 "trade", "arms", "military", "financial", "travel","WGI",
-                "va", "psv", "ge", "rq", "rl", "cc", "WGI"), 
+                "va", "psv", "ge", "rq", "rl", "cc", "WGI","WGI_diff_CHN","gdp_per_capita_diff_CHN","FTA","ORG"), 
       .fns = ~ as.numeric(scale(.)),  
       .names = "{.col}_std" 
     ))
@@ -132,7 +143,7 @@ panel_CP9623 <- panel_CP9623[!apply(panel_CP9623, 1, function(x) any(is.infinite
 cat("清理後資料:", nrow(panel_CP9623), "筆觀察值\n\n")
 
 # ============================================================================
-# 3. 缺失值插補
+# 2. 缺失值插補
 # ============================================================================
 
 cat(rep("=", 80), "\n")
@@ -140,7 +151,7 @@ cat("缺失值插補\n")
 cat(rep("=", 80), "\n\n")
 
 # 定義三類變數
-economic_factors <- c("gdp_std", "china_ex_to_i_std", "china_im_fr_i_std", 
+economic_factors <- c("gdp_per_capita_std", "gdp_per_capita_diff_CHN","china_ex_to_i_std", "china_im_fr_i_std", 
                       "exportdep_std", "importdep_std", "population_total_std")
 
 sanctional_factors <- c("trade_std", "arms_std", "military_std",
@@ -230,7 +241,7 @@ cat("  剩餘缺失值:", final_missing, "\n")
 cat("  完整率:", complete_rate, "%\n\n")
 
 # ============================================================================
-# 4. PCA降維分析
+# 3. PCA降維分析
 # ============================================================================
 
 cat(rep("=", 80), "\n")
@@ -308,6 +319,11 @@ cat("\n主成分總數:", length(pc_cols), "\n")
 
 # 儲存PCA結果
 write_xlsx(CP9623_pca, path = "CP9623_pca.xlsx")
+
+#=============================================================
+#分群分析
+#=============================================================
+
 # ============================================================
 # 1. 資料準備與清洗
 # ============================================================
@@ -319,7 +335,7 @@ target_list <- c(
   "FJI", "FRA", "GAB", "GBR", "GEO", "GNQ", "GRC", "HRV", "HUN", "IDN", 
   "IND", "IRL", "IRN", "IRQ", "ISR", "ITA", "JAM", "JOR", "KAZ", "KEN", 
   "KGZ", "KHM", "KOR", "KWT", "LAO", "LKA", "MAR", "MDV", "MEX", "MMR", 
-  "MNG", "MOZ", "MYS", "NAM", "NGA", "NLD", "NPL", "NZL", "OMN", "PAK", 
+  "MNG", "MOZ", "MYS", "NAM", "NGA", "NLD", "NZL", "OMN", "PAK", 
   "PER", "PHL", "PNG", "POL", "PRT", "QAT", "ROM", "SAU", "SDN", "SEN", 
   "SGP", "SLE", "SUR", "SWE", "THA", "TJK", "TKM", "TTO", "TUR", "TZA", 
   "UKR", "URY", "UZB", "VNM", "WSM", "ZAF", "ZMB", "ZWE"
@@ -327,10 +343,10 @@ target_list <- c(
 
 cluster_vars <- c(
   "exportdep_std", "importdep_std", "population_total_std",
-  "gdp_per_capita_std", "WGI", "trade_std", "arms_std", 
-  "military_std", "financial_std", "travel_std", 
-  "FTA", "ORG", "dip_age_std", "dist_std"
-)
+  "gdp_per_capita_diff_CHN_std", "WGI_diff_CHN_std",
+  "economy_std", "arms_and_military_std",
+  "FTA_std", "ORG_std", "dip_age_std", "dist_std"
+  )
 
 # 篩選資料
 df_base <- CP9623_pca %>%
@@ -446,5 +462,223 @@ for(i in 1:best_k) {
   cat(paste(ctrys, collapse = ", "), "\n")
 }
 
-# 匯出 CSV
-write.csv(final_data, "Auto_Kmedians_Result.csv", row.names = FALSE)
+# 設定想輸出的資料夾路徑 (請依您的電腦修改)
+output_dir <- "D:/R/Research_result"
+
+
+# 組合路徑並匯出
+# file.path 會自動幫您加上正確的斜線
+write.csv(final_data, 
+          file.path(output_dir, "Auto_Kmedians_Result.csv"), 
+          row.names = FALSE)
+
+cat("檔案已儲存至:", file.path(output_dir, "Auto_Kmedians_Result.csv"), "\n")
+
+# ============================================================
+# 繪製 K-medians 分群地圖 (修正版)
+# ============================================================
+
+library(tidyverse)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(sf)
+library(viridis) # 載入 viridis 套件以獲得更好的多色階配色
+
+# 1. 取得世界地圖基底
+world_map <- ne_countries(scale = "medium", returnclass = "sf")
+
+# 2. 整理分群資料 (包含修復 pseries 錯誤的關鍵步驟)
+map_input <- final_data %>%
+  ungroup() %>%  # 解除群組狀態以防萬一
+  select(countrycode, cluster) %>%
+  mutate(
+    # ★ 關鍵修正：強制將 pseries 轉為純文字 character
+    countrycode = as.character(countrycode),
+    # 確保 cluster 是因子
+    cluster = as.factor(cluster)
+  )
+
+# 3. 合併資料 (現在不會報錯了)
+merged_map <- world_map %>%
+  left_join(map_input, by = c("iso_a3" = "countrycode"))
+
+# 4. 繪圖 (針對 K-medians 8群 優化配色)
+ggplot(data = merged_map) +
+  # 繪製國家 (邊框設細一點 size=0.1 比較精緻)
+  geom_sf(aes(fill = cluster), color = "white", size = 0.1) +
+  
+  # 設定投影 (Robinson 是標準世界地圖投影)
+  coord_sf(crs = "+proj=robin") +
+  
+  # ★ 配色調整：因為有 8 群，使用 'plasma' 或 'turbo' 色票區別度較高
+  # na.value 設定灰色，代表沒有被分群的國家
+  scale_fill_viridis_d(option = "turbo", na.value = "#eeeeee") +
+  
+  # 外觀修飾
+  labs(title = paste0("全球分群態勢圖 (K-medians, K=", length(unique(na.omit(map_input$cluster))), ")"),
+       subtitle = "灰色區域為未納入分析之國家",
+       fill = "群組 (Cluster)",
+       caption = "資料來源: CIER Research / Method: K-medians (Manhattan Distance)") +
+  
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.position = "bottom",       # 圖例放下面
+    legend.key.width = unit(1.5, "cm"), # 拉寬圖例讓顏色更清楚
+    panel.grid = element_blank(),     # 去除網格
+    axis.text = element_blank()       # 去除經緯度數字
+  )
+
+
+# ============================================================
+# 自動決定最佳 K 值 (輪廓係數法 - K-Means 版本)
+# ============================================================
+
+cat("正在計算最佳分群數 (Silhouette Method using K-Means)...\n")
+
+# 使用 factoextra 的自動檢測功能
+# 修改點：FUN = kmeans (原本是 cluster::pam)
+sil_plot <- fviz_nbclust(df_scaled[, valid_vars], kmeans, method = "silhouette", k.max = 10) +
+  labs(title = "最佳 K 值檢測 (輪廓係數法 - K-Means)", subtitle = "數值越高代表分群越好")
+
+print(sil_plot)
+
+# ★ 自動抓取圖中最高的那個點作為 best_k
+sil_data <- sil_plot$data
+best_k <- as.numeric(as.character(sil_data$clusters[which.max(sil_data$y)]))
+
+cat(paste0("\n✅ 系統偵測到的最佳分群數 (Best K) 為: ", best_k, "\n"))
+
+# ============================================================
+# 執行 K-Means 分群 (使用 Best K)
+# ============================================================
+
+set.seed(123)
+# 修改點：使用標準 kmeans 函式
+# nstart = 25 是為了避免陷入局部最佳解，讓它隨機嘗試 25 次起點並選最好的
+kmeans_res <- kmeans(df_scaled[, valid_vars], centers = best_k, nstart = 25)
+
+# 存回結果
+final_data$cluster <- as.factor(kmeans_res$cluster)
+
+cat("K-Means 分群執行完畢！\n")
+
+# ============================================================
+# 視覺化結果
+# ============================================================
+
+# --- 熱圖 (Heatmap) ---
+# 修改點：因為是 K-Means，群中心應該看 "Mean" (平均值) 而非 Median
+cluster_centers <- final_data %>%
+  group_by(cluster) %>%
+  summarise(across(all_of(valid_vars), mean), .groups = "drop") %>% 
+  pivot_longer(cols = -cluster, names_to = "variable", values_to = "value")
+
+p1 <- ggplot(cluster_centers, aes(x = variable, y = cluster, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "#4575b4", mid = "white", high = "#d73027", midpoint = 0) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = paste0("K-Means (k=", best_k, ") 特徵熱圖"), 
+       subtitle = "使用平均值特徵：紅色=高, 藍色=低", x = "", y = "Cluster")
+
+print(p1)
+
+# --- 時間溯源圖 (Timeline) ---
+p2 <- ggplot(final_data, aes(x = start_year, fill = cluster)) +
+  geom_histogram(binwidth = 1, position = "stack", alpha = 0.9, color = "white") +
+  scale_x_continuous(breaks = seq(min(final_data$start_year, na.rm = TRUE), 2023, 2)) +
+  facet_wrap(~cluster, ncol = 1) + 
+  theme_minimal() +
+  labs(title = "時間溯源：建立夥伴關係年份分佈",
+       subtitle = paste0("基於 K-Means (K=", best_k, ") 的分群結果"),
+       x = "建立關係年份 (Start Year)", y = "國家數量")
+
+print(p2)
+
+# ============================================================
+# 輸出名單 (含年份) 與 存檔
+# ============================================================
+
+cat(paste0("\n=== K-Means (K=", best_k, ") 分群名單 ===\n"))
+
+for(i in 1:best_k) {
+  cat(paste0("\n[Cluster ", i, "] 國家清單 (按年份排序):\n"))
+  
+  ctrys <- final_data %>% 
+    filter(cluster == i) %>% 
+    arrange(start_year) %>% 
+    mutate(info = paste0(countrycode, "(", start_year, ")")) %>% 
+    pull(info)
+  
+  cat(paste(ctrys, collapse = ", "), "\n")
+}
+
+# 設定輸出路徑
+output_dir <- "D:/R/Research_result"
+
+# 建立目錄 (若不存在)
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir, recursive = TRUE)
+}
+
+# 儲存檔案
+output_file <- file.path(output_dir, "Auto_Kmeans_Result.csv")
+
+write.csv(final_data, output_file, row.names = FALSE)
+
+cat("檔案已儲存至:", output_file, "\n")
+
+
+#==============================================================
+#繪製分群國家分布圖
+#==============================================================
+
+# --- 載入套件 ---
+library(tidyverse)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(sf)
+
+# --- 準備地圖資料 ---
+# 1. 取得世界地圖基底 (使用 medium 解析度)
+world_map <- ne_countries(scale = "medium", returnclass = "sf")
+
+# 2. 整理您的分群資料
+map_input <- final_data %>%
+  # ★ 關鍵修正：先解除 group 狀態 (若有的話)，並強制轉型
+  ungroup() %>% 
+  select(countrycode, cluster) %>%
+  mutate(
+    cluster = as.factor(cluster),
+    # 把 pseries 轉回一般的 character
+    countrycode = as.character(countrycode) 
+  )
+# 檢查一下：現在應該要是 <chr> 而不是 <pseries>
+print(class(map_input$countrycode))
+# 3. 合併資料 (利用 ISO 代碼對接)
+merged_map <- world_map %>%
+  left_join(map_input, by = c("iso_a3" = "countrycode"))
+# --- 繪圖 (ggplot2) ---
+ggplot(data = merged_map) +
+  # 繪製國家多邊形
+  geom_sf(aes(fill = cluster), color = "white", size = 0.1) +
+  
+  # 設定投影方式 (Robinson 投影，適合世界地圖)
+  coord_sf(crs = "+proj=robin") +
+  
+  # 設定配色 (使用 Set1 鮮明配色，若群數超過 9 群建議改用 viridis)
+  scale_fill_brewer(palette = "Set1", na.value = "#eeeeee") +
+  
+  # 外觀設定
+  labs(title = paste0("全球分群分布圖 (K=", length(unique(na.omit(map_input$cluster))), ")"),
+       subtitle = "灰色區域為未納入分析或資料缺失的國家",
+       fill = "所屬群組",
+       caption = "資料來源: CIER Research") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.position = "bottom",
+    panel.grid = element_blank(),
+    axis.text = element_blank()
+  )
