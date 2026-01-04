@@ -86,7 +86,7 @@ CP9623$importdep <- CP9623$china_ex_to_i / CP9623$gdp
 # 整併變數
 CP9623$economy <- CP9623$trade + CP9623$financial
 CP9623$arms_and_military <- CP9623$arms + CP9623$military
-
+CP9623$sanction <- CP9623$economy + CP9623$arms_and_military + CP9623$travel
 # 加入習近平時期變數
 CP9623$xi <- ifelse(CP9623$year < 2013, 0, 1)
 
@@ -325,6 +325,23 @@ cat("已建立滯後變數，總樣本數:", nrow(reg_data), "\n")
 # 5. 定義時期與篩選目標國家
 # ============================================================================
 
+# 檢查並轉換 reg_data 的關鍵欄位
+# 注意：對因子(factor)轉數值時，必須先轉文字(character)再轉數值(numeric)
+# 否則 1996 會變成 1, 1997 會變成 2 (因子的編號)
+
+reg_data <- reg_data %>%
+  ungroup() %>% # 確保沒有殘留的分組設定
+  mutate(
+    # 處理年份
+    year = as.numeric(as.character(year)),
+    
+    # 處理夥伴關係等級 (避免它也是因子)
+    partnership = as.numeric(as.character(partnership)),
+    partnership_next = as.numeric(as.character(partnership_next))
+  )
+
+# 檢查轉換是否成功 (應該要看到 numeric 或 dbl，而不是 factor)
+str(reg_data$year)
 # 定義函數：找出在特定時期內，從 0 變為 >0 的國家
 identify_upgraders <- function(data, start_y, end_y) {
   period_data <- data %>% filter(year >= start_y & year <= end_y)
@@ -391,8 +408,9 @@ iv_formula <- paste(
     "sanct_PC1",                        # 制裁維度
     "gov_PC1",                          # 治理維度
     "dist_std",                         # 地理距離
-    "dip_age_std"                       # 建交年齡
-    # "xi"                              # 習近平變數在分時期分析中可能不需要，因為時期已切開
+    "dip_age_std",                      # 建交年齡
+    "FTA",                              # 與中國是否簽署FTA
+    "ORG"                               # 是否加入中國主導之國際組織
   ), 
   collapse = " + "
 )
@@ -469,3 +487,4 @@ if(!is.null(res_p2$logit)) {
   cat("\n[2013-2022 Logit] Odds Ratios (勝算比):\n")
   print(exp(coef(res_p2$logit)))
 }
+
