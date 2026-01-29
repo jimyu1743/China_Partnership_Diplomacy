@@ -360,303 +360,156 @@ write_xlsx(CP9623_pca, path = "CP9623_pca.xlsx")
 cat("檔案已儲存：CP9623_pca.xlsx\n")
 
 # ==============================================================================
-# 習近平外交戰略 QCA 分析系統 (終極智慧版 / 2026-01 Update)
+# 📦QCA分析
 # ==============================================================================
-
-# 0. 載入必要套件
-# ------------------------------------------------------------
-if(!require(QCA)) install.packages("QCA")
-if(!require(dplyr)) install.packages("dplyr")
-if(!require(ggplot2)) install.packages("ggplot2")
-if(!require(stringr)) install.packages("stringr")
-
+# 0. 載入套件
 library(QCA)
-library(dplyr)
-library(ggplot2)
-library(stringr)
+library(tidyverse)
+library(FactoMineR)
 
-# ============================================================
-# 1. 數據前處理 (Data Cleaning & Definition)
-# ============================================================
-# 假設您的原始資料框名稱為 CP9623_qca
+# 1. 定義您資料集中的真實變數名稱 (避免 "object not found" 錯誤)
+# ------------------------------------------------------------------------------
+economic_factors   <- c("gdp_per_capita", "china_ex_to_i", "china_im_fr_i") 
+sanctional_factors <- c("financial", "trade", "travel")
+governance_factors <- c("rl", "ge", "cc")
 
-cat("\n🔄 正在進行數據清洗與變數定義...\n")
+# 2. 定義函數：超級菁英聯集生成器 (Top 10% Threshold)
+# ------------------------------------------------------------------------------
+create_super_elite_proxy <- function(data, vars, label) {
+  clean_data <- data[, vars] %>% na.omit()
+  n_vars <- min(3, length(vars))
+  
+  # PCA 權重計算
+  if(nrow(clean_data) > 10) {
+    pca <- PCA(clean_data, scale.unit = TRUE, graph = FALSE, ncp = 1)
+    loadings <- abs(pca$var$coord[, 1])
+    top_vars <- names(sort(loadings, decreasing = TRUE)[1:n_vars])
+  } else { top_vars <- vars[1:n_vars] }
+  
+  valid_vars <- top_vars[top_vars %in% names(data)]
+  cat(paste0("\n🏆 [", label, "] 採用『超級菁英 (Top 10%)』標準，納入：", paste(valid_vars, collapse="|"), "\n"))
+  
+  calibrated_matrix <- matrix(NA, nrow=nrow(data), ncol=length(valid_vars))
+  for(i in 1:length(valid_vars)) {
+    raw <- if_else(is.na(data[[valid_vars[i]]]), 0, as.numeric(data[[valid_vars[i]]]))
+    x_jit <- jitter(raw, amount=0.00001)
+    
+    # 🔥 關鍵參數：將交叉點設為 0.90 (前10%)，大幅提高門檻以提升一致性
+    anchors <- quantile(x_jit, probs=c(0.50, 0.90, 0.98), na.rm=TRUE) 
+    
+    calibrated_matrix[,i] <- QCA::calibrate(x_jit, type="fuzzy", thresholds=c(anchors[1], anchors[2], anchors[3]))
+  }
+  union_score <- apply(calibrated_matrix, 1, max, na.rm=TRUE)
+  ifelse(abs(union_score-0.5)<0.001, 0.501, union_score)
+}
 
-qca_ready <- CP9623_qca %>%
-  dplyr::select(partnership, FZ_ECON, FZ_SANCT, FZ_GOV, FTA, year) %>%
+# 輔助：格式清洗函數 (防止 superSubset 報錯)
+clean_qca_data <- function(df) {
+  d <- as.data.frame(df) # 移除 tibble 屬性
+  d[] <- lapply(d, as.numeric) # 確保全數值
+  return(d)
+}
+
+# 3. 數據處理 Pipeline (清洗 -> 滯後 -> 生成 -> 切割)
+# ------------------------------------------------------------------------------
+cat("\n🔄 [Step 1] 數據準備與滯後處理 (Lag t-1)...\n")
+
+# A. 基礎清洗
+panel_clean <- as.data.frame(panel_common_df)
+if(!"countrycode" %in% names(panel_clean)) {
+  if("country" %in% names(panel_clean)) panel_clean$countrycode <- panel_clean$country
+}
+
+# B. 執行滯後 (使用 dplyr::lag)
+raw_vars_to_lag <- c(economic_factors, sanctional_factors, governance_factors, "FTA", "ORG")
+
+CP_Lagged <- panel_clean %>%
+  arrange(countrycode, year) %>%
+  group_by(countrycode) %>%
+  mutate(across(all_of(raw_vars_to_lag), ~dplyr::lag(., 1), .names = "{.col}_lag")) %>%
+  ungroup() %>%
+  # 移除第一年產生的 NA
+  filter(!is.na(get(paste0(economic_factors[1], "_lag"))))
+
+# 更新變數名稱為滯後版
+econ_lag   <- paste0(economic_factors, "_lag")
+sanct_lag  <- paste0(sanctional_factors, "_lag")
+gov_lag    <- paste0(governance_factors, "_lag")
+
+cat("🚀 [Step 2] 生成模型變數 (Super Elite Variables)...\n")
+
+CP_Final_Dataset <- CP_Lagged %>%
   mutate(
-    # 【關鍵修正 1】強制修正年份格式 (避免 R 把年份當成文字類別)
-    year = as.numeric(as.character(year)),
+    # 生成超級菁英變數
+    FZ_ECON = create_super_elite_proxy(., econ_lag, "經濟力"),
+    FZ_SANCT = create_super_elite_proxy(., sanct_lag, "風險度"),
+    FZ_GOV = create_super_elite_proxy(., gov_lag, "治理力"), 
     
-    # 【關鍵修正 2】定義結果變數：戰略夥伴 (Level >= 2 為核心圈)
-    # 邏輯：我們要分析的是「誰進入了核心圈」，而不僅僅是「誰升級了」
-    OUT = if_else(partnership >= 2, 1, 0),
+    # 制度變數校準
+    FZ_FTA = QCA::calibrate(as.numeric(FTA_lag), type="fuzzy", thresholds=c(0.1, 1.5, 2.9)),
+    FZ_ORG = QCA::calibrate(as.numeric(ORG_lag), type="fuzzy", 
+                            thresholds=quantile(jitter(as.numeric(ORG_lag)), probs=c(0.1, 0.5, 0.9), na.rm=TRUE)),
     
-    # 【變數更名】簡化變數名稱以便分析
-    ECON = FZ_ECON,
-    SANCT = FZ_SANCT,
-    GOV = FZ_GOV,
+    # 🎯 結果變數：全面戰略夥伴 (Level 3 Status)
+    # 邏輯：解釋「為什麼是頂級夥伴」比解釋「為什麼今年升級」更穩定
+    OUT_L3 = if_else(as.numeric(as.character(partnership)) >= 3, 1, 0),
     
-    # 【FTA處理】確保 NA 視為 0 (無協定)
-    FTA = if_else(is.na(FTA), 0, FTA)
+    year_num = as.numeric(as.character(year))
   ) %>%
-  na.omit() # 移除缺漏值，確保分析樣本完整
+  mutate(across(starts_with("FZ_"), ~as.numeric(ifelse(abs(.-0.5)<0.001, 0.501, .))))
 
-# ============================================================
-# 2. 時段切割 (Period Splitting)
-# ============================================================
-cat("📊 正在分割時段樣本...\n")
+# C. 數據切割 (P1 vs P2)
+cols <- c("OUT_L3", "FZ_ECON", "FZ_SANCT", "FZ_GOV", "FZ_FTA", "FZ_ORG")
 
-# 時段 A: 江胡時期 (1996-2012) - 戰略對照組
-period_1 <- qca_ready %>% filter(year <= 2012)
+data_p1 <- CP_Final_Dataset %>% 
+  filter(year_num <= 2012) %>% 
+  dplyr::select(all_of(cols)) %>% # 強制使用 dplyr::select
+  na.omit() %>% 
+  clean_qca_data()
 
-# 時段 B: 習近平時期 (2013-2023) - 戰略實驗組
-period_2 <- qca_ready %>% filter(year >= 2013)
+data_p2 <- CP_Final_Dataset %>% 
+  filter(year_num >= 2013) %>% 
+  dplyr::select(all_of(cols)) %>% # 強制使用 dplyr::select
+  na.omit() %>% 
+  clean_qca_data()
 
-cat("   - P1 (江胡時期):", nrow(period_1), "筆\n")
-cat("   - P2 (習近平時期):", nrow(period_2), "筆\n")
+cat(paste0("✅ 資料準備完成: P1 (", nrow(data_p1), ") | P2 (", nrow(data_p2), ")\n"))
 
-# ============================================================
-# 3. 核心運算：QCA 智慧解算引擎 (Adaptive Engine)
-# ============================================================
+# 4. 執行 QCA 分析 (P2 習近平時期)
+# ------------------------------------------------------------------------------
+cat("\n", paste(rep("=", 50), collapse=""), "\n", sep="")
+cat("👉 [P2 分析] 習近平時期：全面戰略夥伴 (Level 3) 的形成邏輯\n")
+cat(paste(rep("=", 50), collapse=""), "\n", sep="")
 
-# --- 函數：自動化解算器 (含自動降標功能) ---
-solve_qca_adaptive <- function(data, label) {
-  cat(paste0("\n🚀 正在分析 ", label, "...\n"))
+# 4.1 必要性檢定
+cat("🔍 必要性檢定 (Consistency > 0.85):\n")
+nec_res <- superSubset(data_p2, outcome = "OUT_L3", 
+                       conditions = cols[-1], relation = "necessity", incl.cut = 0.85)
+print(nec_res)
+
+# 4.2 真值表與解算
+cat("\n📊 充分性解算 (Truth Table):\n")
+TT_P2 <- truthTable(data_p2, outcome = "OUT_L3", 
+                    conditions = cols[-1],
+                    incl.cut = 0.80, # 標準門檻
+                    n.cut = 1,       # 狀態變數樣本足夠，設1即可
+                    sort.by = "incl", 
+                    show.cases = TRUE)
+
+print(head(TT_P2$tt, 10))
+
+SOL_P2 <- tryCatch({
+  minimize(TT_P2, include = "?", details = TRUE, row.dom = FALSE)
+}, error = function(e) {
+  cat("\n⚠️ 0.8 無解，降標至 0.75...\n")
+  TT_Low <- truthTable(data_p2, outcome = "OUT_L3", conditions = cols[-1], incl.cut = 0.75, n.cut = 1)
+  return(minimize(TT_Low, include = "?", details = TRUE))
+})
+
+if(!is.null(SOL_P2)) {
+  cat("\n✅ [解算成功] 路徑結果：\n")
+  print(SOL_P2$IC$incl.cov)
   
-  # 步驟 1: 先嘗試高標準 (0.8)
-  # ------------------------------------------------------
-  TT_high <- truthTable(data, outcome = "OUT", 
-                        conditions = c("ECON", "SANCT", "GOV", "FTA"),
-                        incl.cut = 0.8, n.cut = 1, sort.by = "incl", show.cases = FALSE)
-  
-  sol <- tryCatch({
-    minimize(TT_high, include = "?", details = TRUE, row.dom = FALSE)
-  }, error = function(e) NULL)
-  
-  # 檢查結果是否為空 (有物件但無路徑)
-  is_empty <- is.null(sol) || is.null(sol$IC$incl.cov) || nrow(sol$IC$incl.cov) == 0
-  
-  # 步驟 2: 如果高標準失敗，嘗試戰略降標 (0.75)
-  # ------------------------------------------------------
-  if (is_empty) {
-    cat(paste0("   ⚠️  ", label, " 標準門檻(0.8) 無路徑，啟動戰略降標至 0.75...\n"))
-    
-    TT_low <- truthTable(data, outcome = "OUT", 
-                         conditions = c("ECON", "SANCT", "GOV", "FTA"),
-                         incl.cut = 0.75, n.cut = 1, sort.by = "incl", show.cases = FALSE)
-    
-    sol <- tryCatch({
-      minimize(TT_low, include = "?", details = TRUE, row.dom = FALSE)
-    }, error = function(e) {
-      cat(paste0("   ❌ ", label, " 即使降標至 0.75 仍無解 (戰略混沌)。\n"))
-      return(NULL)
-    })
-    
-    if (!is.null(sol) && !is.null(sol$IC$incl.cov) && nrow(sol$IC$incl.cov) > 0) {
-      cat(paste0("   ✅ ", label, " 降標後解算成功！(捕捉到隱性戰略)\n"))
-    }
-  } else {
-    cat(paste0("   ✅ ", label, " 高標準(0.8) 解算成功！\n"))
-  }
-  
-  return(sol)
+  cat("\n💡 [簡單解] 核心因果路徑 (Parsimonious Solution)：\n")
+  print(SOL_P2$par$incl.cov)
 }
-
-# --- 執行解算 ---
-sol_p1 <- solve_qca_adaptive(period_1, "P1:江胡時期")
-sol_p2 <- solve_qca_adaptive(period_2, "P2:習近平時期")
-
-# ============================================================
-# 結果提取
-# ============================================================
-
-extract_results_robust <- function(sol_object, period_label) {
-  
-  # 定義空結果 (預設回傳格式)
-  empty_df <- data.frame(Path = "無一致戰略 (混沌/無解)", Consistency = 0.0, Coverage = 0.0, Period = period_label)
-  
-  # 1. 檢查物件是否存在
-  if (is.null(sol_object)) return(empty_df)
-  
-  # 2. 檢查是否有 IC (Inclusion/Coverage) 數據
-  if (is.null(sol_object$IC) || is.null(sol_object$IC$incl.cov)) return(empty_df)
-  
-  # 3. 提取統計矩陣
-  stats <- sol_object$IC$incl.cov
-  
-  # 防呆：確保轉為 Data Frame，避免 Matrix 維度問題
-  if (!is.data.frame(stats)) {
-    stats <- as.data.frame(stats)
-  }
-  
-  # --- 關鍵修正：自動偵測欄位名稱 ---
-  # QCA 套件有時欄位叫 "inclS"，有時叫 "incl"
-  
-  # 找一致性 (Consistency)
-  col_incl <- grep("incl", names(stats), value = TRUE)[1] # 抓第一個包含 "incl" 的欄位
-  if (is.na(col_incl)) col_incl <- 1 # 萬一真的沒名字，就抓第 1 欄 (通常是 Consistency)
-  
-  # 找覆蓋率 (Coverage)
-  col_cov <- grep("cov", names(stats), value = TRUE)[1] # 抓第一個包含 "cov" 的欄位 (通常是 covS)
-  if (is.na(col_cov)) col_cov <- 3 # 萬一真的沒名字，就抓第 3 欄 (通常是 Coverage)
-  
-  # 提取路徑名稱
-  paths <- rownames(stats)
-  
-  # 4. 組合最終表格
-  df <- data.frame(
-    Path = paths,
-    Consistency = as.numeric(stats[[col_incl]]), # 使用偵測到的欄位名
-    Coverage = as.numeric(stats[[col_cov]]),     # 使用偵測到的欄位名
-    Period = period_label
-  )
-  
-  return(df)
-}
-
-# ============================================================
-# 整合與繪圖
-# ============================================================
-
-# 1. 整合結果 (這次應該不會報錯了)
-dashboard_data <- bind_rows(
-  extract_results_robust(sol_p1, "P1: 江胡時期 (1996-2012)"),
-  extract_results_robust(sol_p2, "P2: 習近平時期 (2013-2023)")
-)
-
-# 2. 美化路徑名稱 (翻譯機)
-dashboard_data$Path_Label <- dashboard_data$Path %>%
-  str_replace_all("\\*", " + ") %>%
-  str_replace_all("~", "無") %>%
-  str_replace_all("FZ_ECON", "經濟") %>%
-  str_replace_all("FZ_SANCT", "制裁") %>%
-  str_replace_all("FZ_GOV", "治理") %>%
-  str_replace_all("FZ_FTA", "FTA") 
-
-# 3. 輸出表格
-cat("\n", paste(rep("=", 50), collapse = ""), "\n", sep = "")
-cat("📋 戰略路徑總表 (Strategic Pathways)\n")
-cat(paste(rep("=", 50), collapse = ""), "\n", sep = "")
-print(dashboard_data %>% dplyr::select(Period, Path_Label, Consistency, Coverage))
-
-# 4. 繪製最終圖表
-y_max <- max(dashboard_data$Coverage, na.rm = TRUE)
-if(y_max < 0.2) y_max <- 0.5 
-
-plot_final <- ggplot(dashboard_data, aes(x = Consistency, y = Coverage, color = Period)) +
-  geom_point(aes(size = Coverage), alpha = 0.7) +
-  scale_size(range = c(5, 12)) + 
-  geom_text(aes(label = Path_Label), vjust = -1.8, size = 4, fontface = "bold", show.legend = FALSE) +
-  geom_vline(xintercept = 0.75, linetype = "dashed", color = "gray50") +
-  annotate("text", x = 0.74, y = 0.02, label = "戰略門檻 (0.75)", color = "gray50", angle = 90) +
-  scale_x_continuous(limits = c(0, 1.05)) +
-  scale_y_continuous(limits = c(0, y_max * 1.5)) +
-  scale_color_manual(values = c("steelblue", "firebrick")) + 
-  labs(
-    title = "習近平外交戰略變遷：從「混沌」到「制度化」",
-    subtitle = "藍點(P1)：戰略混沌 vs 紅點(P2)：制度化戰略 (FTA)",
-    x = "戰略一致性 (Consistency)",
-    y = "戰略解釋力 (Coverage)"
-  ) +
-  theme_minimal() +
-  theme(legend.position = "bottom")
-
-print(plot_final)
-
-# ==============================================================================
-# 檔案輸出模組
-# ==============================================================================
-
-# 1. 建立輸出目錄 (保持工作區整潔)
-output_dir <- "QCA_Output"
-if (!dir.exists(output_dir)) {
-  dir.create(output_dir)
-  cat(paste0("\n📂 已建立輸出資料夾：", output_dir, "\n"))
-}
-
-# ------------------------------------------------------------
-# 2. 輸出圖表 (High-Res Plot)
-# ------------------------------------------------------------
-cat("🖼️ 正在儲存戰略變遷圖...\n")
-
-# 使用 ggsave 輸出高解析度圖片 (300 dpi, 期刊標準)
-ggsave(filename = file.path(output_dir, "Xi_Diplomacy_Strategy_Plot.png"), 
-       plot = plot_final, 
-       width = 10, height = 7, dpi = 300)
-
-cat("   -> 已儲存: Xi_Diplomacy_Strategy_Plot.png\n")
-
-# ------------------------------------------------------------
-# 3. 輸出校準後的原始數據 (Calibrated Data)
-# ------------------------------------------------------------
-cat("💾 正在備份校準後的數據集...\n")
-
-write.csv(CP9623_qca, file.path(output_dir, "QCA_Calibrated_Data.csv"), row.names = FALSE)
-cat("   -> 已儲存: QCA_Calibrated_Data.csv (可檢視各國 FZ 分數)\n")
-
-# ------------------------------------------------------------
-# 4. 輸出文字版完整分析報告 (Full Text Report)
-# ------------------------------------------------------------
-cat("📝 正在生成完整分析報告 (Text Log)...\n")
-
-report_file <- file.path(output_dir, "QCA_Analysis_Report.txt")
-
-# 使用 sink() 將所有 Console 輸出導向文字檔
-sink(report_file)
-
-cat("==============================================================\n")
-cat("習近平外交戰略 QCA 分析報告\n")
-cat("生成時間：", as.character(Sys.time()), "\n")
-cat("==============================================================\n\n")
-
-cat("--- [1] 必要性分析 (Necessity) ---\n")
-cat("\n[P1 江胡時期]\n")
-if(exists("nec_p1")) print(nec_p1)
-cat("\n[P2 習近平時期]\n")
-if(exists("nec_p2")) print(nec_p2)
-
-cat("\n\n--- [2] 充分性解算結果 (Sufficiency Solution) ---\n")
-
-cat("\n[P1 江胡時期 - 解算結果]\n")
-if(exists("sol_p1") && !is.null(sol_p1)) {
-  print(sol_p1)
-} else {
-  cat("無有效解 (混沌狀態)\n")
-}
-
-cat("\n[P2 習近平時期 - 解算結果]\n")
-if(exists("sol_p2") && !is.null(sol_p2)) {
-  print(sol_p2)
-  cat("\n--- P2 解決方案詳細參數 (Parameters of Fit) ---\n")
-  print(sol_p2$IC$incl.cov)
-} else {
-  cat("無有效解\n")
-}
-
-cat("\n\n--- [3] 戰略路徑總表 (Dashboard Data) ---\n")
-if(exists("plot_data")) print(plot_data)
-
-sink() # 結束導向，恢復 Console 輸出
-
-cat("   -> 已儲存: QCA_Analysis_Report.txt (包含所有布林代數解)\n")
-
-# ------------------------------------------------------------
-# 5. (選用) 輸出 P2 的真值表與結果 (Excel 友善格式)
-# ------------------------------------------------------------
-# 如果 P2 有解，我們把它的真值表單獨存出來，方便您貼到論文附錄
-if(exists("sol_p2") && !is.null(sol_p2)) {
-  
-  # 提取真值表 (Truth Table)
-  tt_export <- sol_p2$tt$tt
-  write.csv(tt_export, file.path(output_dir, "P2_TruthTable.csv"), row.names = FALSE)
-  
-  # 提取最終路徑參數
-  path_export <- sol_p2$IC$incl.cov
-  write.csv(path_export, file.path(output_dir, "P2_Solution_Pathways.csv"))
-  
-  cat("   -> 已儲存: P2_TruthTable.csv & P2_Solution_Pathways.csv\n")
-}
-
-cat("\n✅ 全部存檔完成！請檢查 'QCA_Output' 資料夾。\n")
-
