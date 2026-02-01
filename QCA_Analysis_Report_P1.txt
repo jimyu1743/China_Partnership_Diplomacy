@@ -1,0 +1,58 @@
+=== QCA 分析報告 (江胡時期 P1) ===
+標準：Partnership >= 1
+
+--- 必要性檢定 ---
+
+                                            inclN   RoN   covN  
+--------------------------------------------------------------- 
+1  ~FZ_FTA                                  0.923  0.038  0.161 
+2  FZ_ECON + ~FZ_SANCT                      0.858  0.213  0.177 
+3  ~FZ_SANCT + FZ_ORG                       0.866  0.161  0.170 
+4  ~FZ_SANCT + FZ_POL                       0.850  0.212  0.176 
+5  ~FZ_SANCT + ~FZ_GOV + ~FZ_POL            0.853  0.123  0.161 
+6  ~FZ_ECON + ~FZ_SANCT + FZ_GOV + FZ_FTA   0.854  0.148  0.165 
+7  ~FZ_ECON + ~FZ_SANCT + FZ_GOV + ~FZ_POL  0.858  0.126  0.163 
+8  FZ_ECON + ~FZ_GOV + FZ_ORG + FZ_POL      0.850  0.192  0.172 
+9  ~FZ_SANCT + FZ_GOV + FZ_FTA + ~FZ_POL    0.852  0.161  0.167 
+--------------------------------------------------------------- 
+
+
+--- 充分性解算 (嘗試 0.75) ---
+
+  OUT: output value
+    n: number of cases in configuration
+ incl: sufficiency inclusion score
+  PRI: proportional reduction in inconsistency
+
+     FZ_ECON FZ_SANCT FZ_GOV FZ_FTA FZ_ORG FZ_POL   OUT    n    incl  PRI  
+40      1       0       0      1      1      1       0     29   0.587 0.587
+56      1       1       0      1      1      1       0     9    0.577 0.577
+55      1       1       0      1      1      0       0     2    0.524 0.524
+ 8      0       0       0      1      1      1       0     17   0.513 0.513
+48      1       0       1      1      1      1       0     15   0.423 0.423
+24      0       1       0      1      1      1       0     10   0.413 0.413
+63      1       1       1      1      1      0       0     1    0.412 0.412
+39      1       0       0      1      1      0       0     12   0.393 0.393
+36      1       0       0      0      1      1       0     119  0.281 0.281
+47      1       0       1      1      1      0       0     27   0.252 0.252
+60      1       1       1      0      1      1       0     28   0.251 0.251
+44      1       0       1      0      1      1       0     224  0.245 0.245
+52      1       1       0      0      1      1       0     33   0.218 0.218
+35      1       0       0      0      1      0       0     79   0.213 0.213
+59      1       1       1      0      1      0       0     33   0.202 0.202
+12      0       0       1      0      1      1       0     51   0.191 0.191
+43      1       0       1      0      1      0       0     358  0.183 0.183
+ 4      0       0       0      0      1      1       0     339  0.180 0.180
+51      1       1       0      0      1      0       0     22   0.178 0.178
+27      0       1       1      0      1      0       0     11   0.168 0.168
+20      0       1       0      0      1      1       0     64   0.164 0.164
+11      0       0       1      0      1      0       0     150  0.137 0.137
+19      0       1       0      0      1      0       0     118  0.125 0.125
+ 3      0       0       0      0      1      0       0     609  0.106 0.106
+
+It seems that all output values have been coded to zero.
+Suggestion: lower the inclusion score for the presence of the outcome,
+the relevant argument is "incl.cut" which now has a value of 0.75.
+
+
+結論：在此門檻下無解 (No Solution)，顯示外交策略缺乏一致的結構性路徑。
