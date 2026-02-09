@@ -4,22 +4,24 @@
 
 --- 必要性檢定 ---
 
-                                   inclN   RoN   covN  
------------------------------------------------------- 
- 1  ~FZ_FTA                        0.857  0.144  0.422 
- 2  FZ_ORG                         0.866  0.298  0.475 
- 3  FZ_ECON + ~FZ_GOV              0.853  0.303  0.470 
- 4  FZ_ECON + ~FZ_SANCT + FZ_GOV   0.851  0.290  0.465 
- 5  FZ_ECON + ~FZ_SANCT + FZ_FTA   0.852  0.293  0.467 
- 6  ~FZ_ECON + ~FZ_SANCT + FZ_POL  0.851  0.245  0.450 
- 7  FZ_ECON + ~FZ_SANCT + ~FZ_POL  0.858  0.258  0.457 
- 8  FZ_ECON + ~FZ_SANCT + FZ_POL   0.892  0.225  0.462 
- 9  FZ_ECON + FZ_SANCT + FZ_POL    0.853  0.358  0.491 
-10  ~FZ_SANCT + ~FZ_GOV + FZ_FTA   0.852  0.230  0.445 
-11  ~FZ_SANCT + ~FZ_GOV + ~FZ_POL  0.851  0.220  0.442 
-12  ~FZ_SANCT + ~FZ_GOV + FZ_POL   0.892  0.188  0.451 
-13  ~FZ_SANCT + FZ_GOV + FZ_POL    0.854  0.261  0.456 
------------------------------------------------------- 
+                                    inclN   RoN   covN  
+------------------------------------------------------- 
+ 1  ~FZ_FTA                         0.857  0.144  0.422 
+ 2  FZ_ORG                          0.866  0.298  0.475 
+ 3  FZ_ECON + ~FZ_GOV               0.853  0.303  0.470 
+ 4  ~FZ_ECON + ~FZ_SANCT + ~FZ_GOV  0.850  0.226  0.443 
+ 5  FZ_ECON + ~FZ_SANCT + FZ_GOV    0.851  0.286  0.463 
+ 6  FZ_ECON + ~FZ_SANCT + FZ_FTA    0.853  0.288  0.465 
+ 7  ~FZ_ECON + ~FZ_SANCT + FZ_POL   0.855  0.236  0.449 
+ 8  FZ_ECON + ~FZ_SANCT + ~FZ_POL   0.858  0.250  0.455 
+ 9  FZ_ECON + ~FZ_SANCT + FZ_POL    0.895  0.220  0.462 
+10  FZ_ECON + FZ_SANCT + FZ_POL     0.853  0.356  0.490 
+11  ~FZ_SANCT + ~FZ_GOV + FZ_FTA    0.858  0.222  0.446 
+12  ~FZ_SANCT + ~FZ_GOV + ~FZ_POL   0.857  0.211  0.442 
+13  ~FZ_SANCT + ~FZ_GOV + FZ_POL    0.896  0.180  0.450 
+14  ~FZ_SANCT + FZ_GOV + FZ_POL     0.859  0.255  0.456 
+15  ~FZ_SANCT + FZ_FTA + FZ_POL     0.855  0.265  0.458 
+------------------------------------------------------- 
 
 
 --- 最小化解 (Solution) ---
