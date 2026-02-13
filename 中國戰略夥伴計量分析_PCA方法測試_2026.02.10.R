@@ -358,193 +358,572 @@ cat("\n統計總結：共加入", length(pc_cols), "個主成分欄位。\n")
 write_xlsx(CP9623_pca, path = "CP9623_pca.xlsx")
 cat("檔案已儲存：CP9623_pca.xlsx\n")
 
+
 # ==============================================================================
-# 📦 V4.0 全週期扁平化 QCA 分析 (Flattened / Cross-Sectional Design)
+  
+# 📦 V7.0 中國外交夥伴關係：分期靜態比較與全自動存檔系統 (Final Integrated Code)
+  
 # ==============================================================================
+
+
 
 # 0. 載入必要套件
+
 library(tidyverse)
+
 library(FactoMineR)
+
 library(QCA)
+
 library(writexl)
+
 library(ggplot2)
+
 library(ggrepel)
 
-# 1. 資料源確認
-if (!exists("CP9623_pca")) stop("❌ 錯誤：找不到 'CP9623_pca'。請先讀取原始數據。")
 
-# 2. 定義變數組
-economic_factors   <- c("gdp_per_capita", "gdp_per_capita_diff_CHN", "china_ex_to_i", 
-                        "china_im_fr_i", "exportdep", "importdep", "population_total")
-sanctional_factors <- c("trade", "arms", "military", "financial", "travel")
-governance_factors <- c("va", "psv", "ge", "rq", "rl", "cc") 
-has_dip <- "dip_age" %in% names(CP9623_pca)
 
-# 3. 核心函數：校準與合成 (保持不變)
+# ==============================================================================
+
+# 🏗️ 第一部分：核心工具函數定義 (Helper Functions)
+
+# ==============================================================================
+
+
+
+# 1.1 手動校準函數
+
 manual_calibrate <- function(x, quantile_prob) {
+  
   rank_score <- ecdf(x)(x)
+  
   k <- log(0.5) / log(quantile_prob)
+  
   return(rank_score ^ k)
+  
 }
 
+
+
+# 1.2 PCA 降維與聯集校準函數
+
 create_pca_union_proxy <- function(data, vars, label, prob_threshold = 0.75) {
-  # 注意：這裡輸入的 data 已經是聚合後的數據，不能再做 lag
-  sub_data <- data[, vars]
-  # 處理可能的 NA (填補為 0 或平均值)
+  
+  # 確保輸入數據為 data.frame
+  
+  sub_data <- as.data.frame(data)[, vars, drop = FALSE]
+  
+  
+  
+  # 填補 NA (以平均值填補，避免 PCA 報錯)
+  
   sub_data <- sub_data %>% mutate(across(everything(), ~ifelse(is.na(.), mean(., na.rm=TRUE), .)))
+  
+  
   
   n_select <- min(3, length(vars))
   
+  
+  
   if(length(vars) > 1) {
+    
     pca <- PCA(sub_data, scale.unit = TRUE, graph = FALSE, ncp = 1)
+    
     loadings <- abs(pca$var$coord[, 1])
+    
     top_vars <- names(sort(loadings, decreasing = TRUE)[1:n_select])
+    
   } else { top_vars <- vars }
   
-  cat(paste0("\n🏆 [", label, "] 選取代表性變數：", paste(top_vars, collapse=" | "), "\n"))
+  
+  
+  cat(paste0("\n🏆 [", label, "] 選取變數：", paste(top_vars, collapse=" | "), "\n"))
+  
+  
   
   calibrated_matrix <- matrix(NA, nrow=nrow(data), ncol=length(top_vars))
+  
   for(i in 1:length(top_vars)) {
+    
     raw <- if_else(is.na(data[[top_vars[i]]]), 0, as.numeric(data[[top_vars[i]]]))
+    
     x_jit <- jitter(raw, amount=0.00001) 
+    
     calibrated_matrix[,i] <- manual_calibrate(x_jit, prob_threshold)
+    
   }
+  
   union_score <- apply(calibrated_matrix, 1, max, na.rm=TRUE)
+  
   ifelse(abs(union_score-0.5) < 0.001, 0.501, union_score)
+  
 }
 
-# 4. 數據扁平化 (Flattening Panel Data)
-# ------------------------------------------------------------------------------
-cat("\n🔨 [Step 1] 執行數據扁平化 (Aggregation)...\n")
 
-panel_clean <- as.data.frame(CP9623_pca)
-if(!"countrycode" %in% names(panel_clean)) {
-  if("country" %in% names(panel_clean)) panel_clean <- panel_clean %>% rename(countrycode = country)
-  else if("CNAME" %in% names(panel_clean)) panel_clean <- panel_clean %>% rename(countrycode = CNAME)
+
+# 1.3 國家名單解碼函數
+
+get_countries_from_solution <- function(solution_obj, raw_data) {
+  
+  # 支援多重解結構
+  
+  paths <- if("solution" %in% names(solution_obj)) solution_obj$solution[[1]] else solution_obj[[1]]
+  
+  
+  
+  cat("\n🔍 [路徑案例解碼]\n")
+  
+  cat("--------------------------------------------------\n")
+  
+  
+  
+  for(path in paths) {
+    
+    cat(paste0("\n👉 路徑: ", path, "\n"))
+    
+    
+    
+    conditions <- unlist(strsplit(path, "\\*"))
+    
+    subset_data <- raw_data %>% filter(OUT == 1)
+    
+    
+    
+    for(cond in conditions) {
+      
+      if(grepl("~", cond)) {
+        
+        var_name <- gsub("~", "", cond)
+        
+        subset_data <- subset_data %>% filter(.data[[var_name]] < 0.5)
+        
+      } else {
+        
+        var_name <- cond
+        
+        subset_data <- subset_data %>% filter(.data[[var_name]] >= 0.5)
+        
+      }
+      
+    }
+    
+    
+    
+    matched_countries <- subset_data$countrycode
+    
+    cat(paste0("   🌍 符合國家 (N=", length(matched_countries), "): ", 
+               
+               paste(matched_countries, collapse = ", "), "\n"))
+    
+  }
+  
+  cat("--------------------------------------------------\n")
+  
 }
 
-# 準備 Lag 變數 (雖然是扁平化，但我們仍希望用 t-1 的邏輯來捕捉"影響")
-# 這裡策略調整：先對每個國家算每一年的 Lag，然後再聚合
-vars_to_process <- c(economic_factors, sanctional_factors, governance_factors, "FTA", "ORG")
-if(has_dip) vars_to_process <- c(vars_to_process, "dip_age")
 
-# 計算每個國家的 outcome 事件
-# 邏輯：只要該國在觀察期內partnership等級有上升(diff > 0)，或是從無到有，OUT=1
-# 但更嚴格的定義是：OUT = max(partnership) >= 1 ? 或者是次數？
-# 用戶要求：OUT = "build_and_upgrade"
 
-CP_Processed <- panel_clean %>%
-  arrange(countrycode, year) %>%
-  group_by(countrycode) %>%
-  mutate(
-    part_num = as.numeric(as.character(partnership)),
-    part_prev = dplyr::lag(part_num, default = 0),
-    # 事件定義：本期比上期高，且本期至少是 1 (排除 0->0)
-    is_upgrade = if_else(part_num > part_prev & part_num >= 1, 1, 0)
-  ) %>%
-  ungroup()
+# 1.4 數據清洗與扁平化聚合函數 (Flattening)
 
-# 聚合 (Aggregation)
-# 策略：
-# 1. 結構變數 (Econ, Gov, Sanct) -> 取 Mean (長期特徵)
-# 2. 制度變數 (FTA, ORG) -> 取 Max (只要有過連結就算)
-# 3. 結果變數 (OUT) -> Max (只要發生過升級就算 1)
-
-Cross_Sectional_Data <- CP_Processed %>%
-  group_by(countrycode) %>%
-  summarise(
-    # OUT: 是否發生過升級事件
-    OUT_Event = max(is_upgrade, na.rm = TRUE),
-    
-    # 結構變數取平均
-    across(all_of(economic_factors), ~mean(., na.rm = TRUE), .names = "{.col}"),
-    across(all_of(sanctional_factors), ~mean(., na.rm = TRUE), .names = "{.col}"),
-    across(all_of(governance_factors), ~mean(., na.rm = TRUE), .names = "{.col}"),
-    
-    # 制度變數取最大值 (曾經有過 FTA 或高參與度)
-    FTA = max(as.numeric(FTA), na.rm = TRUE),
-    ORG = max(as.numeric(ORG), na.rm = TRUE),
-    dip_age = if(has_dip) max(as.numeric(dip_age), na.rm=TRUE) else 0
-  ) %>%
-  filter(!is.na(gdp_per_capita)) %>% # 移除無數據國家
-  mutate(OUT = ifelse(OUT_Event > 0, 1, 0)) # 二值化
-
-cat(paste0("📊 聚合後樣本數: ", nrow(Cross_Sectional_Data), " 個國家\n"))
-cat(paste0("📊 OUT=1 (發生過升級) 的國家數: ", sum(Cross_Sectional_Data$OUT), "\n"))
-
-# 5. 計算模糊集分數 (Calibration)
-# ------------------------------------------------------------------------------
-cat("\n🚀 [Step 2] 校準模糊集 (全樣本靜態特徵)...\n")
-
-# 注意：這裡直接使用聚合後的變數名，不加 _lag 後綴
-qca_ready_data <- Cross_Sectional_Data %>%
-  mutate(
-    FZ_ECON = create_pca_union_proxy(., economic_factors, "長期經濟吸引力", 0.75),
-    FZ_SANCT = create_pca_union_proxy(., sanctional_factors, "長期風險暴露", 0.90),
-    FZ_GOV = create_pca_union_proxy(., governance_factors, "長期治理水平", 0.70),
-    
-    FZ_POL = if(has_dip) manual_calibrate(dip_age, 0.60) else 0, # 建交越久分數越高
-    FZ_FTA = case_when(FTA >= 2 ~ 1, FTA >= 1 ~ 0.6, TRUE ~ 0),
-    FZ_ORG = manual_calibrate(ORG, 0.70)
-  ) %>%
-  mutate(across(starts_with("FZ_"), ~as.numeric(ifelse(abs(.-0.5)<0.001, 0.501, .))))
-
-# 6. QCA 分析與真值表
-# ------------------------------------------------------------------------------
-cat("\n⚡ [Step 3] 執行全樣本 QCA 分析...\n")
-
-conds <- c("FZ_ECON", "FZ_SANCT", "FZ_GOV", "FZ_FTA", "FZ_ORG")
-if(has_dip) conds <- c(conds, "FZ_POL")
-
-# 建立真值表
-TT_Full <- truthTable(qca_ready_data, outcome = "OUT", conditions = conds, 
-                      incl.cut = 0.80, # 稍微提高標準，因為雜訊變少了
-                      n.cut = 1, 
-                      sort.by = "incl", 
-                      show.cases = TRUE)
-
-print(TT_Full)
-
-# 最小化求解
-SOL_Full <- minimize(TT_Full, include = "?", details = TRUE, row.dom = FALSE)
-
-cat("\n✅ [分析結果] 全週期靜態路徑：\n")
-print(SOL_Full$IC$incl.cov)
-
-# 7. 結果視覺化 (XY Plot)
-# ------------------------------------------------------------------------------
-# 假設我們找到了一條路徑 (例如 Path 1)，我們畫出它的 XY Plot
-if(nrow(SOL_Full$pims) > 0) {
-  # 提取第一條路徑的邏輯 (這部分通常需要人工看結果調整，這裡先做自動化嘗試)
-  # 為了通用，我們畫 "Solution Formula" 的隸屬度
+process_period_data <- function(raw_panel, start_year, end_year, label) {
   
-  sol_membership <- SOL_Full$pims[, 1] # 取第一個解的隸屬度向量
+  cat(paste0("\n📅 正在處理 [", label, "] (", start_year, "-", end_year, ")\n"))
   
-  plot_data <- qca_ready_data %>%
+  
+  
+  # A. 時間切割與事件標記
+  
+  period_panel <- raw_panel %>%
+    
+    filter(as.numeric(as.character(year)) >= start_year & 
+             
+             as.numeric(as.character(year)) <= end_year) %>%
+    
+    arrange(countrycode, year) %>%
+    
+    group_by(countrycode) %>%
+    
     mutate(
-      Solution_Score = sol_membership,
-      Outcome_Score = OUT,
-      Consistent = Solution_Score <= Outcome_Score
+      
+      part_num = as.numeric(as.character(partnership)),
+      
+      part_prev = dplyr::lag(part_num, default = 0), 
+      
+      # OUT定義：建立(0->1) 或 升級(1->2, 2->3)
+      
+      is_upgrade = if_else(part_num > part_prev & part_num >= 1, 1, 0)
+      
     ) %>%
-    filter(Solution_Score > 0.5) # 只看都在解裡的國家
+    
+    ungroup()
   
-  p_flat <- ggplot(plot_data, aes(x = Solution_Score, y = Outcome_Score)) +
-    geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "gray") +
-    geom_point(aes(color = Consistent), size = 3, alpha = 0.8) +
-    geom_text_repel(aes(label = countrycode), size = 3) +
-    labs(
-      title = "全週期 (1996-2023) 夥伴關係升級路徑分析",
-      subtitle = "基於扁平化數據 (Flattened Data)",
-      x = "路徑隸屬度 (Solution Membership)",
-      y = "夥伴關係建立/升級 (Outcome)",
-      color = "一致性"
-    ) +
-    theme_minimal()
   
-  print(p_flat)
+  
+  # B. 扁平化聚合
+  
+  agg_data <- period_panel %>%
+    
+    group_by(countrycode) %>%
+    
+    summarise(
+      
+      OUT_Event = max(is_upgrade, na.rm = TRUE),
+      
+      across(all_of(economic_factors), ~mean(., na.rm = TRUE)),
+      
+      across(all_of(sanctional_factors), ~mean(., na.rm = TRUE)),
+      
+      across(all_of(governance_factors), ~mean(., na.rm = TRUE)),
+      
+      FTA = max(as.numeric(FTA), na.rm = TRUE),
+      
+      ORG = max(as.numeric(ORG), na.rm = TRUE),
+      
+      dip_age = if(has_dip) max(as.numeric(dip_age), na.rm=TRUE) else 0
+      
+    ) %>%
+    
+    # 清洗異常值
+    
+    mutate(across(where(is.numeric), ~ifelse(is.infinite(.), 0, .))) %>%
+    
+    mutate(across(where(is.numeric), ~ifelse(is.nan(.), 0, .))) %>%
+    
+    filter(!is.na(gdp_per_capita)) %>%
+    
+    mutate(OUT = ifelse(OUT_Event > 0, 1, 0))
+  
+  
+  
+  cat(paste0("   📊 樣本數: ", nrow(agg_data), " | OUT=1 案例數: ", sum(agg_data$OUT), "\n"))
+  
+  return(agg_data)
+  
 }
 
-# 8. 存檔
+
+
+# 1.5 穩健版 QCA 分析主函數 (處理格式與多重解)
+
+run_static_qca_final <- function(flat_data, label) {
+  
+  cat(paste0("\n⚡ 執行 QCA 分析 (V7.0): ", label, "\n"))
+  
+  
+  
+  # A. 校準
+  
+  qca_data <- flat_data %>%
+    
+    ungroup() %>%
+    
+    mutate(
+      
+      FZ_ECON = create_pca_union_proxy(., economic_factors, "經濟力", 0.75),
+      
+      FZ_SANCT = create_pca_union_proxy(., sanctional_factors, "風險度", 0.90),
+      
+      FZ_GOV = create_pca_union_proxy(., governance_factors, "治理力", 0.70),
+      
+      FZ_POL = if(has_dip) manual_calibrate(dip_age, 0.60) else 0,
+      
+      FZ_FTA = case_when(FTA >= 2 ~ 1, FTA >= 1 ~ 0.6, TRUE ~ 0),
+      
+      FZ_ORG = manual_calibrate(ORG, 0.70)
+      
+    ) %>%
+    
+    mutate(across(starts_with("FZ_"), ~as.numeric(ifelse(abs(.-0.5)<0.001, 0.501, .)))) %>%
+    
+    dplyr::select(countrycode, OUT, starts_with("FZ_")) %>%
+    
+    na.omit() %>%
+    
+    as.data.frame() # 🔥 關鍵：強制轉為 data.frame 以相容 pof()
+  
+  
+  
+  # B. 真值表
+  
+  conds <- names(qca_data)[grep("FZ_", names(qca_data))]
+  
+  TT <- truthTable(qca_data, outcome = "OUT", conditions = conds, 
+                   
+                   incl.cut = 0.80, n.cut = 1, sort.by = "incl")
+  
+  
+  
+  # C. 最小化求解
+  
+  tryCatch({
+    
+    SOL <- minimize(TT, include = "?", details = TRUE, row.dom = FALSE)
+    
+    
+    
+    # D. 輸出結果與適配度
+    
+    if (length(SOL$solution) > 1) {
+      
+      cat(paste0("\n✨ 發現 ", length(SOL$solution), " 個等效模型 (Model Ambiguity)！\n"))
+      
+      for(i in 1:length(SOL$solution)) {
+        
+        cat(paste0("\n📝 [模型 ", i, "] 路徑組合: \n"))
+        
+        print(SOL$solution[[i]])
+        
+        model_formula <- paste(SOL$solution[[i]], collapse = " + ")
+        
+        fit_stats <- pof(model_formula, data = qca_data, outcome = "OUT")
+        
+        print(fit_stats$incl.cov)
+        
+        get_countries_from_solution(list(solution = list(SOL$solution[[i]])), qca_data)
+        
+      }
+      
+    } else {
+      
+      cat("\n✅ 發現單一最佳路徑:\n")
+      
+      print(SOL$solution)
+      
+      cat("\n📊 參數適配度 (Fit):\n")
+      
+      print(SOL$IC$incl.cov)
+      
+      get_countries_from_solution(SOL, qca_data)
+      
+    }
+    
+    
+    
+    # 回傳結果物件供後續繪圖與存檔用
+    
+    return(list(tt = TT, data = qca_data, sol = SOL))
+    
+    
+    
+  }, error = function(e) {
+    
+    cat(paste0("⚠️ 分析受阻: ", e$message, "\n"))
+    
+    return(NULL)
+    
+  })
+  
+}
+
+
+
+# 1.6 繪圖函數
+
+save_final_plot <- function(qca_data, sol_obj, label, filename) {
+  
+  if(is.null(sol_obj) || is.null(qca_data)) return()
+  
+  
+  
+  sol_vector <- sol_obj$pims[, 1] # 取第一個解繪圖
+  
+  
+  
+  plot_data <- qca_data %>%
+    
+    mutate(
+      
+      Solution_Score = sol_vector,
+      
+      Outcome_Score = OUT,
+      
+      Consistent = Solution_Score <= Outcome_Score,
+      
+      Label = ifelse(Solution_Score > 0.5, countrycode, "")
+      
+    )
+  
+  
+  
+  p <- ggplot(plot_data, aes(x = Solution_Score, y = Outcome_Score)) +
+    
+    geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "gray50") +
+    
+    geom_jitter(aes(color = Consistent), width = 0.02, height = 0.02, size = 3, alpha = 0.7) +
+    
+    geom_text_repel(aes(label = Label), size = 3, box.padding = 0.4, max.overlaps = 30) +
+    
+    scale_color_manual(values = c("FALSE" = "#E07A5F", "TRUE" = "#3D405B"),
+                       
+                       labels = c("矛盾 (X>Y)", "一致 (X<=Y)")) +
+    
+    labs(title = paste0(label, " - 核心路徑分析"),
+         
+         x = "路徑隸屬度 (Membership)", y = "結果 (Outcome)", color = "一致性") +
+    
+    theme_minimal() + theme(legend.position = "bottom")
+  
+  
+  
+  ggsave(filename, plot = p, width = 8, height = 6, dpi = 300)
+  
+  cat(paste0("   🎨 圖片已儲存: ", filename, "\n"))
+  
+}
+
+
+
+# ==============================================================================
+
+# 🚀 第二部分：執行腳本 (Execution Script)
+
+# ==============================================================================
+
+
+
+# 1. 準備數據與變數
+
+if (!exists("CP9623_pca")) stop("❌ 錯誤：找不到 'CP9623_pca'。")
+
+
+
+economic_factors   <- c("gdp_per_capita", "gdp_per_capita_diff_CHN", "china_ex_to_i", 
+                        
+                        "china_im_fr_i", "exportdep", "importdep", "population_total")
+
+sanctional_factors <- c("trade", "arms", "military", "financial", "travel")
+
+governance_factors <- c("va", "psv", "ge", "rq", "rl", "cc") 
+
+has_dip <- "dip_age" %in% names(CP9623_pca)
+
+
+
+# 2. 生成兩期扁平化數據
+
+data_p1_flat <- process_period_data(CP9623_pca, 2002, 2012, "P1 江胡時期")
+
+data_p2_flat <- process_period_data(CP9623_pca, 2013, 2023, "P2 習近平時期")
+
+
+
+# 3. 開始分析與錄製報告
+
 # ------------------------------------------------------------------------------
-write_xlsx(TT_Full$tt, "QCA_TruthTable_Flattened_FullPeriod.xlsx")
-cat("\n💾 已儲存真值表至 'QCA_TruthTable_Flattened_FullPeriod.xlsx'\n")
+
+# 強制重置錄製通道 (防止卡死)
+
+while(sink.number() > 0) sink()
+
+
+
+timestamp <- format(Sys.time(), "%Y%m%d_%H%M")
+
+report_filename <- paste0("QCA_Final_Analysis_Report_", timestamp, ".txt")
+
+
+
+sink(report_filename) # 開始錄製到 TXT
+
+
+
+cat("==============================================================\n")
+
+cat("   中國外交夥伴關係 QCA 最終分析報告 (Comparative Static Analysis)\n")
+
+cat(paste0("   生成時間: ", Sys.time(), "\n"))
+
+cat("==============================================================\n\n")
+
+
+
+cat(">>> PART 1: 江胡時期 (P1 1996-2012) <<<\n")
+
+res_p1 <- run_static_qca_final(data_p1_flat, "P1 江胡時期")
+
+
+
+cat("\n\n==============================================================\n\n")
+
+
+
+cat(">>> PART 2: 習近平時期 (P2 2013-2023) <<<\n")
+
+res_p2 <- run_static_qca_final(data_p2_flat, "P2 習近平時期")
+
+
+
+cat("\n\n==============================================================\n")
+
+cat("   報告結束\n")
+
+cat("==============================================================\n")
+
+
+
+sink() # 結束錄製
+
+cat(paste0("\n✅ 文字報告已成功儲存為: ", report_filename, "\n"))
+
+
+
+# 4. 匯出 Excel 真值表
+
+# ------------------------------------------------------------------------------
+
+cat("\n💾 正在匯出 Excel 真值表...\n")
+
+
+
+prepare_tt_excel <- function(tt_obj, raw_data) {
+  
+  if(is.null(tt_obj)) return(data.frame(Message = "No Results"))
+  
+  df <- as.data.frame(tt_obj$tt)
+  
+  ids_to_names <- function(ids_str) {
+    
+    if(is.na(ids_str) || ids_str == "") return("")
+    
+    ids <- as.numeric(unlist(strsplit(as.character(ids_str), ",")))
+    
+    tryCatch({ return(paste(raw_data[ids, ]$countrycode, collapse = ", ")) }, 
+             
+             error = function(e) return(ids_str))
+    
+  }
+  
+  df$Countries <- sapply(df$cases, ids_to_names)
+  
+  return(df)
+  
+}
+
+
+
+tt_p1_export <- prepare_tt_excel(res_p1$tt, res_p1$data)
+
+tt_p2_export <- prepare_tt_excel(res_p2$tt, res_p2$data)
+
+
+
+excel_filename <- paste0("QCA_Final_TruthTables_", timestamp, ".xlsx")
+
+write_xlsx(list("P1_JiangHu" = tt_p1_export, "P2_XiJinping" = tt_p2_export), excel_filename)
+
+cat(paste0("✅ 真值表已儲存為: ", excel_filename, "\n"))
+
+
+
+# 5. 匯出圖片
+
+# ------------------------------------------------------------------------------
+
+save_final_plot(res_p1$data, res_p1$sol, "P1 江胡時期", "QCA_Plot_P1_Final.png")
+
+save_final_plot(res_p2$data, res_p2$sol, "P2 習近平時期", "QCA_Plot_P2_Final.png")
+
+
+
+cat("\n🎉 全部程序執行完畢！請檢查您的工作目錄。\n")
+
